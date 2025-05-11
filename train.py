@@ -1,9 +1,10 @@
 # %% Imports
+import json
 import logging
 import os
+import random
 import time
 import warnings
-import json
 
 import lightgbm as lgb
 
@@ -23,8 +24,8 @@ from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeRegressor
 
-from split_data import get_train_test_data, get_train_test_img
 from preprocessor import create_data_transformer_pipeline
+from split_data import get_train_test_data, get_train_test_img
 
 logging.basicConfig(level=logging.WARNING, handlers=[logging.StreamHandler()])
 logging.getLogger("lightgbm").setLevel(logging.ERROR)
@@ -33,7 +34,7 @@ pd.set_option("display.float_format", "{:.4f}".format)
 
 # %% Configuration Constants
 RANDOM_STATE = 42
-N_TRIALS_OPTUNA = 500
+N_TRIALS_OPTUNA = 100
 CV_FOLDS = 5
 TARGET_VARIABLE = "price"
 TUNING_SCORING_METRIC = "mape"
@@ -52,6 +53,10 @@ SELECTED_FEATURES_PATH = "selected_features.json"
 
 os.makedirs(ARTIFACT_PATH, exist_ok=True)
 os.makedirs(optuna_dir, exist_ok=True)
+
+
+random.seed(RANDOM_STATE)
+np.random.seed(RANDOM_STATE)
 
 
 # Simplified build_pipeline, only contains the model
@@ -82,9 +87,9 @@ MODEL_PREFIX = "model__"
 def get_model_configs():
     """Returns a dictionary of models and their hyperparameter search spaces."""
     configs = {
-        "DecisionTree": {
-            "model": DecisionTreeRegressor(random_state=RANDOM_STATE),
-        },
+        # "DecisionTree": {
+        #    "model": DecisionTreeRegressor(random_state=RANDOM_STATE),
+        # },
         "RandomForest": {
             "model": RandomForestRegressor(random_state=RANDOM_STATE, n_jobs=-1),
         },
@@ -394,6 +399,7 @@ def train_evaluate_log(
         study_name=study_name,
         direction=OPTUNA_DIRECTION,
         load_if_exists=True,
+        seed=RANDOM_STATE,
         pruner=optuna.pruners.MedianPruner(),
     )
 
@@ -553,7 +559,7 @@ if __name__ == "__main__":
         f"Raw Train Data: {X_train_full_raw.shape}, Raw Test Data: {X_test_full_raw.shape}"
     )
 
-    district_col_name = "district" 
+    district_col_name = "district"
     outlier_col_name = "outlier"
 
     original_img_cols = img_train_raw.columns.tolist()
@@ -601,9 +607,7 @@ if __name__ == "__main__":
         print(f"Error loading or validating selected features: {e}")
         exit()
 
-    Y_train_log_transformed = np.log(
-        Y_train_raw[TARGET_VARIABLE]
-    )
+    Y_train_log_transformed = np.log(Y_train_raw[TARGET_VARIABLE])
 
     cv_strategy = KFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
     model_configs = get_model_configs()
@@ -637,9 +641,7 @@ if __name__ == "__main__":
                     X_train_raw_full=X_train_full_raw,
                     Y_train_log=Y_train_log_transformed,
                     X_test_raw_full=X_test_full_raw,
-                    Y_test=Y_test_raw[
-                        TARGET_VARIABLE
-                    ],  
+                    Y_test=Y_test_raw[TARGET_VARIABLE],
                     numeric_cols_original=original_numeric_cols,
                     categorical_cols_original=original_categorical_cols,
                     img_cols_original=original_img_cols,
@@ -650,11 +652,8 @@ if __name__ == "__main__":
                     parent_run_id=main_run.info.run_id,
                 )
             except Exception as e:
-                logging.error(
-                    f"* ERROR training {model_name}: {e} !!!!", exc_info=True
-                )
+                logging.error(f"* ERROR training {model_name}: {e} !!!!", exc_info=True)
                 mlflow.log_param(f"ERROR_{model_name}", str(e))
                 continue
 
     print("\n--- Experiment Finished ---")
-
