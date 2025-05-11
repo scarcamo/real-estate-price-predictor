@@ -1,802 +1,660 @@
-import joblib
-import pandas as pd
+# %% Imports
+import logging
+import os
+import time
+import warnings
+import json
+
+import lightgbm as lgb
+
+# MLflow import
+import mlflow
+import mlflow.lightgbm
+import mlflow.sklearn
+import mlflow.xgboost
 import numpy as np
-
-RANDOM_STATE = 42
-
-df = pd.read_csv('data/real_estate_thesis_processed.csv', low_memory=False, index_col=0)
-
-general_ranking = pd.read_csv('data/feature_ranking.csv', index_col=0)
-
-selected_cols = general_ranking[general_ranking['keep']]
-
-if 'outlier' in selected_cols.index:
-    selected_cols = selected_cols.index.drop('outlier')
-
-selected_cols = selected_cols.index.to_list()
-
-df = df[df['price'].notna()] #.reset_index(drop=True)
-
-
-
-
-######## Split
-
-import matplotlib
-import matplotlib.pyplot as plt
-import matplotlib.lines as mlines
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-
-from sklearn.tree import plot_tree
-from sklearn import metrics
-from sklearn.preprocessing import scale
-from sklearn.metrics import mean_squared_error
-from sklearn import tree
-from sklearn.model_selection import cross_validate
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import cross_val_score
+import optuna
+import pandas as pd
+import xgboost as xgb
+from optuna.integration import MLflowCallback
+from sklearn.ensemble import AdaBoostRegressor, RandomForestRegressor
+from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
-from sklearn.model_selection import train_test_split
-
-
-if 'price_per_m2' in df.columns:
-    df.drop(columns=['price_per_m2'], inplace=True)
-
-
-target_variable = "price"
-
-feature_names = df.columns.drop([target_variable])
-
-vec_cols = [col for col in feature_names if col.startswith('vector')]
-poi_cols = [col for col in selected_cols if col.startswith('dist_') or col.startswith('count_') or col.startswith('play_areas_') or col.startswith('park_areas_') ]
-panorama_cols = [col for col in selected_cols if col.startswith('pano_')]
-base_cols = [col for col in selected_cols if col not in poi_cols and col not in panorama_cols]
-
-#df_sample = df.copy()
-
-#cond_filter = df['price']<2000000
-df_sample=df[~df['outlier']] #.reset_index(drop=True)
-
-df_sample.drop(columns=['outlier'], inplace=True)
-
-
-price_bins = [0, 250000, 500000, 1000000, 1500000, 2000000, 3000000, float("inf")]
-price_labels = ['0-250k', '250-500k', '500k-1M', '1M-1.5M', '1.5M-2M', '2M-3M', '3M+']
-
-df_sample['price_bin'] = pd.cut(df_sample[target_variable], bins=price_bins, labels=price_labels)
-
-X_train, X_test, Y_train, Y_test = train_test_split(
-    df_sample[selected_cols], df_sample[target_variable],
-    stratify=df_sample['price_bin'],
-    random_state=RANDOM_STATE,
-    test_size=0.20
-)
-
-
-Y_train_ln = np.log(Y_train)
-Y_test_ln = np.log(Y_test)
-
-
-
-
-#### Comparison of methods
-
-
-N_ITER = 500
-SCORING='neg_mean_absolute_error' # neg_mean_absolute_error, neg_root_mean_squared_error, neg_mean_absolute_percentage_error
-CV = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
-
-
-from sklearn.preprocessing import FunctionTransformer, StandardScaler
-from sklearn.impute import SimpleImputer
-from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import PowerTransformer, MinMaxScaler, RobustScaler
+from sklearn.tree import DecisionTreeRegressor
 
-log_transform_cols = ['area_m2', 'floor_number', 'building_age',
-                       'building_floors_num', 'distance_to_center_km', 'room_size_m2', 'floor_ratio' ]
+from split_data import get_train_test_data, get_train_test_img
+from preprocessor import create_data_transformer_pipeline
 
-scale_cols = ['latitude', 'longitude',  ]
+logging.basicConfig(level=logging.WARNING, handlers=[logging.StreamHandler()])
+logging.getLogger("lightgbm").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore")
+pd.set_option("display.float_format", "{:.4f}".format)
+
+# %% Configuration Constants
+RANDOM_STATE = 42
+N_TRIALS_OPTUNA = 500
+CV_FOLDS = 5
+TARGET_VARIABLE = "price"
+TUNING_SCORING_METRIC = "mape"
+OPTUNA_DIRECTION = "minimize"
+MLFLOW_CALLBACK_METRIC_NAME = f"cv_{TUNING_SCORING_METRIC}"
 
 
+APPLY_SCALE_TRANSFORM_IN_PIPELINE = False
 
-def get_pipeline(model):
-    pipeline = Pipeline([
-        #('preprocessor', preprocessor),
-        ('model', model)
-    ])
+optuna_dir = "optuna_studies"
+db_file = "tuning.db"
+STUDY_DB_PATH = f"sqlite:///{os.path.join(optuna_dir, db_file)}"
+ARTIFACT_PATH = "models_and_artifacts"
+MLFLOW_EXPERIMENT_NAME = "Real Estate Price Prediction"
+SELECTED_FEATURES_PATH = "selected_features.json"
+
+os.makedirs(ARTIFACT_PATH, exist_ok=True)
+os.makedirs(optuna_dir, exist_ok=True)
+
+
+# Simplified build_pipeline, only contains the model
+def build_model_pipeline(model):
+    pipeline = Pipeline([("model", model)])
     return pipeline
 
 
-from sklearn.metrics import mean_squared_error, root_mean_squared_error, r2_score, mean_absolute_percentage_error
-
-
-def get_metrics(Y_test, Y_predict, which=None):
-    rmse = root_mean_squared_error(Y_test, Y_predict)
-    r2 = r2_score(Y_test, Y_predict)
-    mape = mean_absolute_percentage_error(Y_test, Y_predict)
-
-    #if which:
-    #    print(f'{which} metrics')
-    metrics_df = pd.DataFrame({
-                            'rmse':[rmse],
-                            'r2':[r2],
-                            'mape':[mape],
-                           })
-    return metrics_df
-
-results = dict()
-
-
-
-import numpy as np
-import pandas as pd
-from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
-
-def compute_errors(X_train, Y_train, Y_predict_train, X_test, Y_test, Y_predict_test, price_bins=None):
-    """
-    Compute RMSE and MAPE per district and per price range for both training and test sets.
-    Returns merged results in a DataFrame.
-    """
-
-    # Make copies to avoid modifying original DataFrames
-    X_train_copy = X_train.copy()
-    X_test_copy = X_test.copy()
-
-    # Step 1: Reconstruct the 'district' column
-    #district_cols = [col for col in X_test_copy.columns if col.startswith('district_')]
-    #X_test_copy['district'] = X_test_copy[district_cols].idxmax(axis=1).str.replace('district_', '')
-    #X_train_copy['district'] = X_train_copy[district_cols].idxmax(axis=1).str.replace('district_', '')
-
-    # Step 2: Create DataFrames for train and test
-    df_test = pd.DataFrame({'district': None, 'y_true': Y_test, 'y_pred': Y_predict_test})
-    df_train = pd.DataFrame({'district': None, 'y_train': Y_train, 'y_pred_train': Y_predict_train})
-
-    # Step 3: Compute errors per district
-    def compute_group_errors(df, true_col, pred_col, groupby='district'):
-        results = []
-        for group_name, group in df.groupby(groupby):
-            rmse = np.sqrt(mean_squared_error(group[true_col], group[pred_col]))
-            mape = mean_absolute_percentage_error(group[true_col], group[pred_col])
-            results.append({groupby: group_name, 'n': len(group), 'RMSE': int(rmse), 'MAPE': round(mape, 4)})
-        return pd.DataFrame(results).sort_values(by='MAPE', ascending=True)
-
-    #test_df = compute_group_errors(df_test, 'y_true', 'y_pred')
-    #train_df = compute_group_errors(df_train, 'y_train', 'y_pred_train')
-
-    # Merge test and train results per district
-    #district_errors = pd.merge(test_df, train_df, on='district', how='left', suffixes=('_test', '_train'))
-
-    # Step 4: Compute errors per price range if bins are provided
-    if price_bins:
-        df_test['price_range'] = pd.cut(df_test['y_true'], bins=price_bins)
-        df_train['price_range'] = pd.cut(df_train['y_train'], bins=price_bins)
-
-        test_price_errors = compute_group_errors(df_test, 'y_true', 'y_pred', groupby='price_range')
-        train_price_errors = compute_group_errors(df_train, 'y_train', 'y_pred_train', groupby='price_range')
-
-        price_errors = pd.merge(test_price_errors, train_price_errors, on='price_range', how='left', suffixes=('_test', '_train'))
-    else:
-        price_errors = None
-
-
-    return price_errors
-
-
-
-
-
-
-
-#####  testing with subsets of data
-
-
-import xgboost as xgb
-
-best_params = {'max_depth': 10, 'learning_rate': 0.0434191761314323, 'n_estimators': 894, 'min_child_weight': 2,
-               'subsample': 0.6793586180035424, 'colsample_bytree': 0.7027061765951619, 'reg_alpha': 2.582618651372783,
-               'reg_lambda': 6.94850833232177}
-
-
-
-feature_sets = {
-    "base": base_cols,
-    #"poi": poi_cols,
-    #"panorama": panorama_cols,
-    "base_poi": base_cols + poi_cols,
-    "base_panorama": base_cols + panorama_cols,
-    "all": base_cols + poi_cols + panorama_cols
-    # vectors images
-}
-
-results = {}
-for name, cols in feature_sets.items():
-    X_train_subset = X_train[cols]
-    X_test_subset = X_test[cols]
-
-    model = xgb.XGBRegressor(tree_method="hist", objective='reg:quantileerror', quantile_alpha=0.5, **best_params)
-    model.fit(X_train_subset, Y_train_ln)
-    joblib.dump(model, f'models/xgb_qo_{name}.pkl')
-
-
-    Y_predict_train = np.exp(model.predict(X_train_subset))
-    Y_predict_test = np.exp(model.predict(X_test_subset))
-
-    r_train = get_metrics(Y_train, Y_predict_train, 'Train')
-    r_test = get_metrics(Y_test, Y_predict_test, 'Test')
-
-    r_train.index = ['Train']
-    r_test.index = ['Test']
-
-    score = r_test['rmse'].values[0]
-    print(f"{name}: {score}")
-
-
-
-    results[name] = score
-
-
-
-
-
-
-
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.model_selection import GridSearchCV
-from sklearn.model_selection import RandomizedSearchCV
-from scipy.stats import uniform, randint
-
-prefix = "model__"
-
-param_dist = {
-    f'{prefix}max_depth': randint(3, 200),
-    f'{prefix}min_samples_split': [5, 10, 20, 50, 100],
-    f'{prefix}min_samples_leaf': [5, 10, 20, 50],
-    f'{prefix}max_leaf_nodes': [10, 20, 30, 50, 100],
-    f'{prefix}min_impurity_decrease': uniform(0, 0.1),
-    f'{prefix}ccp_alpha': uniform(0, 0.05)
-}
-
-
-
-param_dist = {
-    f"{prefix}max_depth": [3, 5, 10, 20, None],
-    f"{prefix}min_samples_split": [2, 5, 10],
-    f"{prefix}min_samples_leaf": [1, 2, 4, 10],
-    f"{prefix}max_features": ["sqrt", "log2", None]
-}
-
-
-
-dtr = RandomizedSearchCV(
-    estimator=get_pipeline(DecisionTreeRegressor()),
-    param_distributions=param_dist,
-    n_iter=N_ITER,
-    scoring=SCORING, # neg_root_mean_squared_error, neg_mean_absolute_percentage_error
-    cv=CV,
-    n_jobs=-1,
-    verbose=1,
-    random_state=RANDOM_STATE,
-    error_score='raise'
-)
-
-
-dtr.fit(X_train, Y_train_ln)
-
-import joblib
-
-joblib.dump(dtr, 'models/decision_tree_model.pkl')
-
-
-best_params = dtr.best_params_
-print("Best Hyperparameters:", best_params)
-print(f"Best score: {dtr.best_score_:.4f}")
-
-
-
-
-dtr = joblib.load('models/decision_tree_model.pkl')
-
-Y_predict_train = np.exp(dtr.predict(X_train))
-Y_predict_test = np.exp(dtr.predict(X_test))
-
-get_metrics(Y_train, Y_predict_train, 'Train')
-results["DecisionTreeRegressor"] = get_metrics(Y_test, Y_predict_test, 'Test')
-
-
-
-
-
-import xgboost as xgb
-from sklearn.metrics import mean_absolute_error
-from sklearn.model_selection import RandomizedSearchCV
-from scipy.stats import uniform, randint
-
-prefix = "model__"
-
-param_dist = {
-    f'{prefix}max_depth': randint(3, 30),
-    f'{prefix}learning_rate': uniform(0.01, 0.2),
-    f'{prefix}n_estimators': randint(200, 500),
-    f'{prefix}min_child_weight': randint(1, 10),
-
-    f'{prefix}subsample': uniform(loc=0.5, scale=0.5),
-    f'{prefix}colsample_bytree': uniform(loc=0.5, scale=0.5),
-
-    f'{prefix}gamma': uniform(0, 0.5),
-    f'{prefix}reg_lambda': uniform(1, 20),  # L2 regularization
-    f'{prefix}reg_alpha': uniform(0, 10),   # L1 regularization
-    f"{prefix}objective": ["reg:tweedie", "reg:pseudohubererror", "reg:squarederror"],
-    f"{prefix}tree_method": ["approx", "hist"]
-}
-
-
-
-xgb_1 = RandomizedSearchCV(
-    estimator=get_pipeline(xgb.XGBRegressor()),
-    param_distributions=param_dist,
-    n_iter=N_ITER,
-    scoring=SCORING,
-    cv=CV,
-    n_jobs=-1,
-    verbose=1,
-    random_state=RANDOM_STATE,
-    return_train_score=True
-)
-
-xgb_1.fit(X_train, Y_train_ln)
-
-import joblib
-joblib.dump(xgb_1, 'models/xgb_1_randcv.pkl')
-
-
-print("Best Hyperparameters:",  xgb_1.best_params_)
-print(f"Best score: {xgb_1.best_score_:.4f}")
-
-
-
-
-import joblib
-
-xgb_1 = joblib.load('models/xgb_1_randcv.pkl')
-
-Y_predict_train = np.exp(xgb_1.predict(X_train))
-
-Y_predict_test = np.exp(xgb_1.predict(X_test))
-
-
-test_metrics = get_metrics(Y_test, Y_predict_test, 'Test')
-
-results["XGBRegressor"] = test_metrics
-
-
-
-
-price_bins = [250000, 500000, 750000, 1000000, 1500000, 2000000, np.inf]
-price_errors = compute_errors(X_train, Y_train, Y_predict_train, X_test, Y_test, Y_predict_test, price_bins)
-
-price_errors.sort_values(by='price_range')
-
-
-
-best_xgb = xgb_1.best_estimator_.named_steps['model']
-feature_importance = best_xgb.feature_importances_
-feature_names = X_train.columns
-
-importance_df = pd.DataFrame({
-    'Feature': feature_names,
-    'Importance': feature_importance
-}).sort_values(by='Importance', ascending=False).reset_index(drop=True)
-
-
-importance_df.head(20)
-
-
-
-
-
-import xgboost as xgb
-from sklearn.metrics import mean_absolute_error
-from sklearn.model_selection import RandomizedSearchCV
-from scipy.stats import uniform, randint
-
-
-prefix = "model__"
-
-
-param_dist = {
-    f"{prefix}n_estimators": randint(100, 600),
-    f"{prefix}learning_rate": uniform(0.01, 0.3),
-    f"{prefix}max_depth": randint(3, 15),
-    f"{prefix}min_child_weight": randint(1, 10),
-    f"{prefix}subsample": uniform(0.5, 0.5),
-    f"{prefix}colsample_bytree": uniform(0.5, 0.5),
-    f"{prefix}gamma": uniform(0, 5),
-    f"{prefix}reg_lambda": uniform(0, 20),
-    f"{prefix}reg_alpha": uniform(0, 10),
-}
-
-
-
-xgbq_model = xgb.XGBRegressor(tree_method="hist", objective='reg:quantileerror', quantile_alpha=0.5)
-
-
-xbg_q = RandomizedSearchCV(
-    estimator=get_pipeline(xgbq_model),
-    param_distributions=param_dist,
-    n_iter=N_ITER,
-    scoring=SCORING,
-    cv=CV,
-    n_jobs=-1,
-    verbose=1,
-    random_state=RANDOM_STATE,
-    return_train_score=True
-)
-
-xbg_q.fit(X_train, Y_train_ln)
-
-import joblib
-joblib.dump(xbg_q, 'models/xbg_q_randcv.pkl')
-
-xbg_q.best_params_
-
-
-
-
-xbg_q = joblib.load('models/xbg_q_randcv.pkl')
-
-Y_predict_train = np.exp(xbg_q.predict(X_train))
-Y_predict_test = np.exp(xbg_q.predict(X_test))
-
-get_metrics(Y_train, Y_predict_train, 'Train')
-results["XGBRegressorQuantile"] = get_metrics(Y_test, Y_predict_test, 'Test')
-
-
-best_xgb = xbg_q.best_estimator_.named_steps['model']
-feature_importance = best_xgb.feature_importances_
-feature_names = X_train.columns
-
-importance_df = pd.DataFrame({
-    'Feature': feature_names,
-    'Importance': feature_importance
-}).sort_values(by='Importance', ascending=False).reset_index(drop=True)
-
-
-importance_df.head(20)
-
-
-
-
-
-import optuna
-import xgboost as xgb
-from sklearn.pipeline import make_pipeline
-from sklearn.model_selection import cross_val_score
-import numpy as np
-
-def objective(trial):
-    # Suggest hyperparameters
-    # n_estimators = trial.suggest_int("n_estimators", 100, 500)
-    # learning_rate = trial.suggest_float("learning_rate", 0.01, 0.3, log=True)
-    # max_depth = trial.suggest_int("max_depth", 3, 15)
-    # min_child_weight = trial.suggest_int("min_child_weight", 1, 10)
-    # subsample = trial.suggest_float("subsample", 0.5, 1.0)
-    # colsample_bytree = trial.suggest_float("colsample_bytree", 0.5, 1.0)
-    # gamma = trial.suggest_float("gamma", 0, 5)
-    # reg_lambda = trial.suggest_float("reg_lambda", 0, 20)
-    # reg_alpha = trial.suggest_float("reg_alpha", 0, 10)
-
-    param = {
-    'max_depth': trial.suggest_int('max_depth', 3, 10),
-    'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3),
-    'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
-    'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
-    'subsample': trial.suggest_float('subsample', 0.5, 1.0),
-    'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
-    'reg_alpha': trial.suggest_float('reg_alpha', 0, 10),  # L1 regularization
-    'reg_lambda': trial.suggest_float('reg_lambda', 0, 10),  # L2 regularization
-    'random_state': 42
+def evaluate_model(y_true, y_pred, prefix=""):
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mape = mean_absolute_percentage_error(y_true, y_pred)
+    r2 = r2_score(y_true, y_pred)
+    metrics = {
+        f"{prefix}_rmse": rmse,
+        f"{prefix}_mape": mape,
+        f"{prefix}_r2": r2,
     }
+    print(
+        f"{prefix.capitalize()} Metrics: RMSE={rmse:.4f}, MAPE={mape:.4f}, R2={r2:.4f}"
+    )
+    return metrics
 
-    # Define XGBRegressor
-    model = make_pipeline(
-        get_pipeline(xgb.XGBRegressor(
-            tree_method="hist",
-            objective="reg:quantileerror",
-            quantile_alpha=0.5,
-            **param
-        ))
+
+# %% Model Definitions and Hyperparameter Spaces
+MODEL_PREFIX = "model__"
+
+
+def get_model_configs():
+    """Returns a dictionary of models and their hyperparameter search spaces."""
+    configs = {
+        "DecisionTree": {
+            "model": DecisionTreeRegressor(random_state=RANDOM_STATE),
+        },
+        "RandomForest": {
+            "model": RandomForestRegressor(random_state=RANDOM_STATE, n_jobs=-1),
+        },
+        "XGBoost": {
+            "model": xgb.XGBRegressor(
+                random_state=RANDOM_STATE,
+                tree_method="hist",
+                objective="reg:squarederror",
+                n_jobs=-1,
+            ),
+        },
+        "XGBoostQuantile": {
+            "model": xgb.XGBRegressor(
+                random_state=RANDOM_STATE,
+                tree_method="hist",
+                objective="reg:quantileerror",
+                quantile_alpha=0.5,
+                n_jobs=-1,
+            ),
+        },
+        "LightGBM": {
+            "model": lgb.LGBMRegressor(
+                random_state=RANDOM_STATE,
+                objective="regression",
+                metric="mape",  # LGBM internal metric
+                n_jobs=-1,
+                verbose=-1,
+            ),
+        },
+        "AdaBoost": {
+            "model": AdaBoostRegressor(
+                estimator=DecisionTreeRegressor(max_depth=5), random_state=RANDOM_STATE
+            ),
+        },
+    }
+    return configs
+
+
+# %% Main Training Function
+def train_evaluate_log(
+    model_name,
+    model_config,
+    # Raw data and column definitions are passed now
+    X_train_raw_full,  # Combined raw features (numeric, cat, image)
+    Y_train_log,
+    X_test_raw_full,  # Combined raw features for test
+    Y_test,  # Original scale Y_test for final evaluation
+    # Column names for the preprocessor
+    numeric_cols_original,
+    categorical_cols_original,
+    img_cols_original,
+    district_col_name_original,
+    outlier_col_name_original,
+    selected_feature_names,  # Loaded from JSON
+    cv_strategy,
+    parent_run_id=None,
+):
+    print(f"\n--- Tuning {model_name} with Optuna ---")
+    start_time = time.time()
+
+    base_model = model_config["model"]
+
+    # --- Define Optuna Objective Function ---
+    def objective(trial):
+        fold_scores = []
+        # Manual CV loop to handle per-fold preprocessing
+        for fold_idx, (train_idx, val_idx) in enumerate(
+            cv_strategy.split(X_train_raw_full, Y_train_log)
+        ):
+            X_fold_train_raw = X_train_raw_full.iloc[train_idx]
+            y_fold_train_log = Y_train_log.iloc[train_idx]
+            X_fold_val_raw = X_train_raw_full.iloc[val_idx]
+            y_fold_val_log = Y_train_log.iloc[val_idx]
+
+            # 1. Create and fit data_transformer for the current fold's training data
+            # Ensure APPLY_SCALE_TRANSFORM_IN_PIPELINE is used consistently
+            current_data_transformer = create_data_transformer_pipeline(
+                numeric_cols=numeric_cols_original,
+                categorical_cols=categorical_cols_original,
+                img_feature_cols=img_cols_original,
+                district_group_col=district_col_name_original,
+                outlier_indicator_col=outlier_col_name_original,
+                apply_scaling_and_transform=APPLY_SCALE_TRANSFORM_IN_PIPELINE,
+            )
+            current_data_transformer.fit(X_fold_train_raw.copy(), y_fold_train_log)
+
+            # 2. Transform fold data
+            X_fold_train_processed_np = current_data_transformer.transform(
+                X_fold_train_raw.copy()
+            )
+            X_fold_val_processed_np = current_data_transformer.transform(
+                X_fold_val_raw.copy()
+            )
+
+            # 3. Get feature names and convert to DataFrame
+            try:
+                transformed_feature_names_fold = (
+                    current_data_transformer.get_feature_names_out()
+                )
+                X_fold_train_processed_df = pd.DataFrame(
+                    X_fold_train_processed_np,
+                    columns=transformed_feature_names_fold,
+                    index=X_fold_train_raw.index,
+                )
+                X_fold_val_processed_df = pd.DataFrame(
+                    X_fold_val_processed_np,
+                    columns=transformed_feature_names_fold,
+                    index=X_fold_val_raw.index,
+                )
+            except Exception as e:
+                print(
+                    f"Fold {fold_idx}: Error getting feature names from transformer: {e}. Skipping fold."
+                )
+                trial.report(float("inf"), fold_idx)
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
+                # continue # prune or continue
+
+            # 4. Apply selected features (validate names match output of transformer)
+            valid_selected_names_fold = [
+                name
+                for name in selected_feature_names
+                if name in X_fold_train_processed_df.columns
+            ]
+            if len(valid_selected_names_fold) != len(selected_feature_names):
+                raise ValueError(
+                    f"Fold {fold_idx}: Some selected features are not present in the transformed data. "
+                    f"Expected {len(selected_feature_names)}, found {len(valid_selected_names_fold)}."
+                )
+
+            if not valid_selected_names_fold:
+                print(
+                    f"Fold {fold_idx}: No valid selected features remaining after transformation. Skipping fold."
+                )
+                continue
+
+            X_fold_train_selected = X_fold_train_processed_df[valid_selected_names_fold]
+            X_fold_val_selected = X_fold_val_processed_df[valid_selected_names_fold]
+
+            # 5. Define model and pipeline for Optuna trial parameters
+            params = {}
+
+            if model_name == "DecisionTree":
+                params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}max_depth", 5, 50
+                )
+                params[f"{MODEL_PREFIX}min_samples_split"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}min_samples_split", 5, 101
+                )  # Original: 5, 101
+                params[f"{MODEL_PREFIX}min_samples_leaf"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}min_samples_leaf", 5, 51
+                )  # Original: 5, 51
+                params[f"{MODEL_PREFIX}max_features"] = trial.suggest_categorical(
+                    f"{MODEL_PREFIX}max_features", ["sqrt", "log2", None]
+                )
+                params[f"{MODEL_PREFIX}ccp_alpha"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}ccp_alpha", 0.0, 0.05
+                )
+
+            elif model_name == "RandomForest":
+                params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
+                )  # Original: 100, 1000, step=50
+                params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}max_depth", 5, 50
+                )
+                params[f"{MODEL_PREFIX}min_samples_split"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}min_samples_split", 2, 21
+                )
+                params[f"{MODEL_PREFIX}min_samples_leaf"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}min_samples_leaf", 1, 21
+                )
+                params[f"{MODEL_PREFIX}max_features"] = trial.suggest_categorical(
+                    f"{MODEL_PREFIX}max_features", ["sqrt", "log2", 0.5, 0.7, 1.0]
+                )
+                params[f"{MODEL_PREFIX}bootstrap"] = trial.suggest_categorical(
+                    f"{MODEL_PREFIX}bootstrap", [True, False]
+                )
+
+            elif model_name in ["XGBoost", "XGBoostQuantile"]:
+                params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}max_depth", 3, 20
+                )
+                params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}learning_rate", 0.01, 0.3, log=True
+                )  # Original: 0.01, 0.5
+                params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
+                )  # Original: 100, 1000, step=50
+                params[f"{MODEL_PREFIX}min_child_weight"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}min_child_weight", 1, 11
+                )
+                params[f"{MODEL_PREFIX}subsample"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}subsample", 0.6, 1.0
+                )
+                params[f"{MODEL_PREFIX}colsample_bytree"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}colsample_bytree", 0.6, 1.0
+                )
+                params[f"{MODEL_PREFIX}gamma"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}gamma", 0, 0.5
+                )
+                params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}reg_lambda", 1e-3, 10.0, log=True
+                )
+                params[f"{MODEL_PREFIX}reg_alpha"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}reg_alpha", 1e-3, 10.0, log=True
+                )
+                # if model_name == "XGBoostQuantile":
+                #     params[f'{MODEL_PREFIX}quantile_alpha'] = trial.suggest_float(f'{MODEL_PREFIX}quantile_alpha', 0.4, 0.6)
+
+            elif model_name == "LightGBM":
+                params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}learning_rate", 0.01, 0.2, log=True
+                )  # Original: 0.01, 0.2
+                params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
+                )  # Original: 100, 1000
+                params[f"{MODEL_PREFIX}num_leaves"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}num_leaves", 20, 100
+                )  # Original: 20, 100
+                params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_categorical(
+                    f"{MODEL_PREFIX}max_depth", [-1, 5, 10, 15, 20]
+                )
+                params[f"{MODEL_PREFIX}min_child_samples"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}min_child_samples", 5, 51
+                )
+                params[f"{MODEL_PREFIX}subsample"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}subsample", 0.6, 1.0
+                )
+                params[f"{MODEL_PREFIX}colsample_bytree"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}colsample_bytree", 0.6, 1.0
+                )
+                params[f"{MODEL_PREFIX}reg_alpha"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}reg_alpha", 1e-3, 10.0, log=True
+                )
+                params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}reg_lambda", 1e-3, 10.0, log=True
+                )
+
+            elif model_name == "AdaBoost":
+                params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}n_estimators", 50, 500, step=25
+                )
+                params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
+                    f"{MODEL_PREFIX}learning_rate", 0.01, 1.0, log=True
+                )
+                params[f"{MODEL_PREFIX}estimator__max_depth"] = trial.suggest_int(
+                    f"{MODEL_PREFIX}estimator__max_depth", 3, 11
+                )
+                params[f"{MODEL_PREFIX}estimator__min_samples_split"] = (
+                    trial.suggest_int(
+                        f"{MODEL_PREFIX}estimator__min_samples_split", 2, 21
+                    )
+                )
+                params[f"{MODEL_PREFIX}estimator__min_samples_leaf"] = (
+                    trial.suggest_int(
+                        f"{MODEL_PREFIX}estimator__min_samples_leaf", 1, 21
+                    )
+                )
+
+            trial_model_instance = model_config["model"]  # Fresh instance
+            model_pipeline = build_model_pipeline(trial_model_instance)
+            model_pipeline.set_params(**params)
+
+            try:
+                model_pipeline.fit(X_fold_train_selected, y_fold_train_log)
+                y_pred_val_log = model_pipeline.predict(X_fold_val_selected)
+                y_pred_val_orig = np.exp(y_pred_val_log)
+                y_fold_val_orig = np.exp(y_fold_val_log)
+
+                if TUNING_SCORING_METRIC == "mape":
+                    score = mean_absolute_percentage_error(
+                        y_fold_val_orig, y_pred_val_orig
+                    )
+                elif TUNING_SCORING_METRIC == "rmse":
+                    score = np.sqrt(
+                        mean_squared_error(y_fold_val_orig, y_pred_val_orig)
+                    )
+                else:
+                    score = mean_absolute_percentage_error(
+                        y_fold_val_orig, y_pred_val_orig
+                    )
+                fold_scores.append(score)
+            except Exception as e:
+                print(f"Trial failed for fold {fold_idx} with error: {e}")
+                logging.error(f"Trial fold failed: {e}", exc_info=True)
+                return float("inf") if OPTUNA_DIRECTION == "minimize" else float("-inf")
+
+        if not fold_scores:
+            return float("inf") if OPTUNA_DIRECTION == "minimize" else float("-inf")
+        return np.mean(fold_scores)
+
+    # Optuna Study Setup
+    study_name = f"{model_name}_selected_features_study"
+    print(f"Using Optuna study '{study_name}' with storage '{STUDY_DB_PATH}'")
+
+    mlflow_callback = MLflowCallback(
+        tracking_uri=mlflow.get_tracking_uri(),
+        metric_name=MLFLOW_CALLBACK_METRIC_NAME,
+        tag_study_user_attrs=True,
+        tag_trial_user_attrs=True,
+        mlflow_kwargs={"nested": True},
     )
 
-    # Perform cross-validation
-    scores = cross_val_score(model, X_train, Y_train_ln, cv=CV, scoring='neg_mean_squared_error', n_jobs=-1)
+    study = optuna.create_study(
+        storage=STUDY_DB_PATH,
+        study_name=study_name,
+        direction=OPTUNA_DIRECTION,
+        load_if_exists=True,
+        pruner=optuna.pruners.MedianPruner(),
+    )
+
+    print(f"Starting Optuna optimization with {N_TRIALS_OPTUNA} trials...")
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study.optimize(
+        objective,
+        n_trials=N_TRIALS_OPTUNA,
+        callbacks=[mlflow_callback],
+        n_jobs=1,
+        gc_after_trial=True,
+    )
+    tuning_duration = time.time() - start_time
+    print(f"Optuna hyperparameter tuning finished in {tuning_duration:.2f} seconds.")
+
+    best_trial = study.best_trial
+    best_params_optuna = best_trial.params
+    best_score_optuna = best_trial.value
+    print(f"Best Optuna Trial Score ({TUNING_SCORING_METRIC}): {best_score_optuna:.4f}")
+    print("Best Hyperparameters found by Optuna:", best_params_optuna)
+
+    # Train final model with best params on full training data
+    print("Training final model using best parameters...")
+
+    # 1. Create and fit the data_transformer on training data
+    final_data_transformer = create_data_transformer_pipeline(
+        numeric_cols=numeric_cols_original,
+        categorical_cols=categorical_cols_original,
+        img_feature_cols=img_cols_original,
+        district_group_col=district_col_name_original,
+        outlier_indicator_col=outlier_col_name_original,
+        apply_scaling_and_transform=APPLY_SCALE_TRANSFORM_IN_PIPELINE,
+    )
+    final_data_transformer.fit(X_train_raw_full.copy(), Y_train_log)
+
+    # 2. Transform sets
+    X_train_processed_final_np = final_data_transformer.transform(
+        X_train_raw_full.copy()
+    )
+    X_test_processed_final_np = final_data_transformer.transform(X_test_raw_full.copy())
+
+    # 3. Get feature names and convert to df
+    try:
+        final_transformed_feature_names = final_data_transformer.get_feature_names_out()
+        X_train_processed_final_df = pd.DataFrame(
+            X_train_processed_final_np,
+            columns=final_transformed_feature_names,
+            index=X_train_raw_full.index,
+        )
+        X_test_processed_final_df = pd.DataFrame(
+            X_test_processed_final_np,
+            columns=final_transformed_feature_names,
+            index=X_test_raw_full.index,
+        )
+    except Exception as e:
+        print(f"Final model: Error getting feature names from transformer: {e}")
+        return None, None
+
+    # 4. Apply selected features
+    final_valid_selected_names = [
+        name
+        for name in selected_feature_names
+        if name in X_train_processed_final_df.columns
+    ]
+    if not final_valid_selected_names:
+        print("Error: No valid selected features for the final model.")
+        return None, None
+
+    X_train_selected_final = X_train_processed_final_df[final_valid_selected_names]
+    X_test_selected_final = X_test_processed_final_df[final_valid_selected_names]
+
+    # 5. Build and fit the final model pipeline
+    final_model_instance = model_config["model"]
+    best_model_pipeline = build_model_pipeline(final_model_instance)
+    best_model_pipeline.set_params(**best_params_optuna)
+    best_model_pipeline.fit(X_train_selected_final, Y_train_log)
+    print("Final model training complete.")
+
+    # --- Evaluate Final Model ---
+    Y_predict_train_log = best_model_pipeline.predict(X_train_selected_final)
+    Y_predict_test_log = best_model_pipeline.predict(X_test_selected_final)
+    Y_predict_train_orig = np.exp(Y_predict_train_log)
+    Y_predict_test_orig = np.exp(Y_predict_test_log)
+    Y_train_orig = np.exp(Y_train_log)
+
+    train_metrics = evaluate_model(
+        Y_train_orig, Y_predict_train_orig, prefix="train_final"
+    )
+    test_metrics = evaluate_model(Y_test, Y_predict_test_orig, prefix="test_final")
+    total_duration = time.time() - start_time
+
+    # MLflow logging
+    run_tags = {}
+    if parent_run_id:
+        run_tags["mlflow.parentRunId"] = parent_run_id
+
+    with mlflow.start_run(
+        run_name=f"{model_name}_SelectedFeatures_PCA_in_CV_BEST",
+        tags=run_tags,
+        nested=True,
+    ) as run:
+        final_run_id_logged = run.info.run_id
+        mlflow.set_tag("run_type", "best_run_pca_in_cv")
+        mlflow.log_param("model_name", model_name)
+        mlflow.log_param("num_selected_features", len(final_valid_selected_names))
+        mlflow.log_params(
+            {k.replace(MODEL_PREFIX, ""): v for k, v in best_params_optuna.items()}
+        )
+        mlflow.log_metric(f"best_optuna_cv_{TUNING_SCORING_METRIC}", best_score_optuna)
+        mlflow.log_metrics(train_metrics)
+        mlflow.log_metrics(test_metrics)
+        mlflow.log_metric("tuning_duration_sec", tuning_duration)
+        mlflow.log_metric("total_pipeline_duration_sec", total_duration)
+
+        input_example_data = X_train_selected_final.head(5)
+        model_step_in_pipeline = best_model_pipeline.named_steps["model"]
+
+        if isinstance(model_step_in_pipeline, xgb.XGBModel):
+            mlflow.xgboost.log_model(
+                model_step_in_pipeline,
+                f"{model_name}_model",
+                input_example=input_example_data,
+            )
+        elif isinstance(model_step_in_pipeline, lgb.LGBMModel):
+            mlflow.lightgbm.log_model(
+                model_step_in_pipeline,
+                f"{model_name}_model",
+                input_example=input_example_data,
+            )
+        else:
+            mlflow.sklearn.log_model(
+                best_model_pipeline,
+                f"{model_name}_pipeline",
+                input_example=input_example_data,
+            )
+
+        # Log selected feature list
+        feature_list_path = "final_selected_features_list.txt"
+        with open(feature_list_path, "w") as f:
+            for feature in final_valid_selected_names:
+                f.write(f"{feature}\n")
+        mlflow.log_artifact(feature_list_path, artifact_path="feature_info")
+        os.remove(feature_list_path)
+
+    return final_run_id_logged, study
+
+
+# %% Main Execution Block
+if __name__ == "__main__":
+    print("--- Starting Experiment with PCA in CV ---")
+
+    # load data
+    X_train_full_raw, X_test_full_raw, Y_train_raw, Y_test_raw = get_train_test_data()
+    img_train_raw, img_test_raw = get_train_test_img()
+
+    print(
+        f"Raw Train Data: {X_train_full_raw.shape}, Raw Test Data: {X_test_full_raw.shape}"
+    )
+
+    district_col_name = "district" 
+    outlier_col_name = "outlier"
+
+    original_img_cols = img_train_raw.columns.tolist()
+
+    original_numeric_cols = X_train_full_raw.select_dtypes(
+        include=np.number
+    ).columns.tolist()
+
+    original_numeric_cols = [
+        col
+        for col in original_numeric_cols
+        if col != TARGET_VARIABLE
+        and col != outlier_col_name
+        and col not in original_img_cols
+    ]
+
+    original_categorical_cols = X_train_full_raw.select_dtypes(
+        include=["object", "category"]
+    ).columns.tolist()
+    original_categorical_cols = [
+        col for col in original_categorical_cols if col != district_col_name
+    ]
+
+    print(f"Original Numeric Cols: {len(original_numeric_cols)}")
+    print(f"Original Categorical Cols: {len(original_categorical_cols)}")
+    print(f"Original Image Cols: {len(original_img_cols)}")
+
+    print(f"\nLoading selected feature names from {SELECTED_FEATURES_PATH}...")
+    try:
+        with open(SELECTED_FEATURES_PATH, "r") as f:
+            selected_features_names = json.load(f)
+        if not (
+            isinstance(selected_features_names, list)
+            and all(isinstance(f, str) for f in selected_features_names)
+        ):
+            raise ValueError(
+                "Selected features file should contain a JSON list of strings (feature names)."
+            )
+        print(f"Loaded {len(selected_features_names)} selected feature names.")
+
+    except FileNotFoundError:
+        print(f"Error: Selected features file not found at {SELECTED_FEATURES_PATH}.")
+        exit()
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Error loading or validating selected features: {e}")
+        exit()
+
+    Y_train_log_transformed = np.log(
+        Y_train_raw[TARGET_VARIABLE]
+    )
+
+    cv_strategy = KFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+    model_configs = get_model_configs()
+
+    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+    print(f"Using MLflow Experiment: '{MLFLOW_EXPERIMENT_NAME}'")
+
+    with mlflow.start_run(run_name="Main_Experiment_Run_PCA_in_CV") as main_run:
+        print(f"Main Run ID: {main_run.info.run_id}")
+        mlflow.log_param("RANDOM_STATE", RANDOM_STATE)
+        mlflow.log_param("CV_FOLDS", CV_FOLDS)
+        mlflow.log_param(
+            "APPLY_SCALE_TRANSFORM_IN_PIPELINE", APPLY_SCALE_TRANSFORM_IN_PIPELINE
+        )
+        mlflow.log_param("N_TRIALS_OPTUNA", N_TRIALS_OPTUNA)
+
+        mlflow.log_param("num_initial_numeric_features", len(original_numeric_cols))
+        mlflow.log_param(
+            "num_initial_categorical_features", len(original_categorical_cols)
+        )
+        mlflow.log_param("num_initial_image_features", len(original_img_cols))
+        mlflow.log_param(
+            "num_loaded_selected_feature_names", len(selected_features_names)
+        )
+
+        for model_name, config in model_configs.items():
+            try:
+                train_evaluate_log(
+                    model_name=model_name,
+                    model_config=config,
+                    X_train_raw_full=X_train_full_raw,
+                    Y_train_log=Y_train_log_transformed,
+                    X_test_raw_full=X_test_full_raw,
+                    Y_test=Y_test_raw[
+                        TARGET_VARIABLE
+                    ],  
+                    numeric_cols_original=original_numeric_cols,
+                    categorical_cols_original=original_categorical_cols,
+                    img_cols_original=original_img_cols,
+                    district_col_name_original=district_col_name,
+                    outlier_col_name_original=outlier_col_name,
+                    selected_feature_names=selected_features_names,
+                    cv_strategy=cv_strategy,
+                    parent_run_id=main_run.info.run_id,
+                )
+            except Exception as e:
+                logging.error(
+                    f"* ERROR training {model_name}: {e} !!!!", exc_info=True
+                )
+                mlflow.log_param(f"ERROR_{model_name}", str(e))
+                continue
+
+    print("\n--- Experiment Finished ---")
 
-    rmse_log = np.sqrt(-scores.mean())
-    return rmse_log
-    # return np.mean(scores)  # Maximize score (negative RMSE or MAPE)
-
-# Run Optuna Study
-study = optuna.create_study(direction="minimize")  # or "minimize" based on your metric
-study.optimize(objective, n_trials=N_ITER, n_jobs=-1)  # Increase n_trials for better results
-
-# Get best hyperparameters
-best_params = study.best_params
-print("Best Hyperparameters:", best_params)
-print("Best Score:", study.best_value)
-
-
-
-
-import xgboost as xgb
-import os
-import joblib
-
-if not os.path.exists(os.path.join(os.getcwd(), 'models', 'xgb_qo.pkl')) or True:
-  xbg_qo =  xgb.XGBRegressor(tree_method="hist", objective='reg:quantileerror', quantile_alpha=0.5, **best_params)
-  #xbg_qo =  xgb.XGBRegressor(tree_method="hist", objective='reg:pseudohubererror', **best_params)
-  xbg_qo.fit(X_train[base_cols], Y_train_ln)
-
-  joblib.dump(xbg_qo, 'models/xgb_qo.pkl')
-
-xbg_qo = joblib.load('models/xgb_qo.pkl')
-
-Y_predict_train = np.exp(xbg_qo.predict(X_train))
-Y_predict_test = np.exp(xbg_qo.predict(X_test))
-
-get_metrics(Y_train, Y_predict_train, 'Train')
-results["XGBRegressorQuantile"] = get_metrics(Y_test, Y_predict_test, 'Test')   
-
-
-params = xbg_qo.get_params()
-
-filtered_params = {k: v for k, v in params.items() if v is not None}
-print(filtered_params)
-#filtered_params = dict(filter(lambda item: item[1] is not None, params.items()))
-
-
-
-
-price_bins = [250000, 500000, 1000000, 1500000, 2000000, 3000000]
-district_errors, price_errors = compute_errors(X_train, Y_train, Y_predict_train, X_test, Y_test, Y_predict_test, price_bins)
-
-
-
-
-feature_importance = xbg_qo.feature_importances_
-feature_names = X_train.columns
-
-importance_df = pd.DataFrame({
-    'Feature': feature_names,
-    'Importance': feature_importance
-}).sort_values(by='Importance', ascending=False).reset_index(drop=True)
-
-
-importance_df.head(20)
-
-
-
-
-from sklearn.ensemble import AdaBoostRegressor
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.model_selection import RandomizedSearchCV
-from sklearn.pipeline import Pipeline
-import numpy as np
-
-base_estimator = DecisionTreeRegressor(max_depth=3)
-
-ada_boost_model = AdaBoostRegressor(estimator=base_estimator)
-
-param_dist = {
-    'n_estimators': np.arange(50, 400),
-    'learning_rate': np.logspace(-3, 0, 10), #
-    'estimator__max_depth': [3, 4, 5, 6, 7, 10, 12],
-    'estimator__min_samples_split': np.arange(2, 21),
-    'estimator__min_samples_leaf': np.arange(1, 21)
-}
-
-
-N_ITER = 50  # Number of parameter settings that are sampled
-SCORING = 'neg_mean_absolute_error' #'neg_root_mean_squared_error' #'neg_mean_squared_error'  # Scoring metric
-CV = 5  # Number of folds in cross-validation
-RANDOM_STATE = 42
-
-ada_boost_cv = RandomizedSearchCV(
-    estimator=ada_boost_model,
-    param_distributions=param_dist,
-    n_iter=N_ITER,
-    scoring=SCORING,
-    cv=CV,
-    n_jobs=-1,
-    verbose=1,
-    random_state=RANDOM_STATE,
-    return_train_score=True
-)
-
-import joblib
-
-if not os.path.exists(os.path.join(os.getcwd(), 'models', 'ada_boost_cv.pkl')):
-  # Fit the model
-  ada_boost_cv.fit(X_train, Y_train_ln)
-  joblib.dump(ada_boost_cv, 'models/ada_boost_cv.pkl')
-
-ada_boost_cv = joblib.load('models/ada_boost_cv.pkl')
-
-# Get the best parameters
-best_params = ada_boost_cv.best_params_
-print("Best Parameters:", best_params)
-
-
-
-import xgboost as xgb
-
-
-Y_predict_train = np.exp(ada_boost_cv.predict(X_train))
-Y_predict_test = np.exp(ada_boost_cv.predict(X_test))
-
-get_metrics(Y_train, Y_predict_train, 'Train')
-
-results["AdaBoostRegressor"] = get_metrics(Y_test, Y_predict_test, 'Test')
-
-
-best_ada = ada_boost_cv.best_estimator_ #.named_steps['model']
-
-feature_importance = best_ada.feature_importances_
-feature_names = X_train.columns
-
-importance_df = pd.DataFrame({
-    'Feature': feature_names,
-    'Importance': feature_importance
-}).sort_values(by='Importance', ascending=False).reset_index(drop=True)
-
-
-importance_df.head(20)
-
-
-
-price_bins = [250000, 500000, 750000, 1000000, 1250000, 1500000, 2000000, 3000000]
-district_errors, price_errors = compute_errors(X_train, Y_train, Y_predict_train, X_test, Y_test, Y_predict_test, price_bins)
-
-
-
-
-import lightgbm as lgb
-from sklearn.metrics import mean_squared_error, make_scorer
-from sklearn.model_selection import GridSearchCV
-
-
-prefix = "model__"
-
-lgbm_model = lgb.LGBMRegressor(alpha=0.5)
-
-param_grid = {
-    f"{prefix}objective": ["regression",  "quantile"], #"huber",
-    f"{prefix}learning_rate": [0.01, 0.05], # , 0.1
-    f"{prefix}n_estimators": [200, 500], #, 1000
-    f"{prefix}num_leaves": [31, 50],
-    f"{prefix}max_depth": [-1, 10],
-    f"{prefix}min_child_samples": [10, 20],
-    f"{prefix}subsample": [0.7, 0.9, 1.0],
-    f"{prefix}colsample_bytree": [0.7, 0.9, 1.0]
-}
-
-lgbm_q = GridSearchCV(
-    estimator=get_pipeline(lgbm_model),
-    param_grid=param_grid,
-    scoring=SCORING,
-    cv=CV,
-    n_jobs=-1,
-    verbose=1
-)
-
-lgbm_q.fit(X_train, Y_train_ln)
-
-lgbm_q.best_params_
-
-
-
-
-import xgboost as xgb
-
-
-Y_predict_train = np.exp(lgbm_q.predict(X_train))
-Y_predict_test = np.exp(lgbm_q.predict(X_test))
-
-get_metrics(Y_train, Y_predict_train, 'Train')
-results["LGBMRegressor"] = get_metrics(Y_test, Y_predict_test, 'Test')
-
-
-
-import matplotlib.pyplot as plt
-
-
-plt.figure(figsize=(10, 6))
-
-plt.scatter(Y_predict_train, Y_train, color="red", alpha=0.05)
-plt.scatter(Y_predict_test, Y_test, color="blue", alpha=0.05)
-
-plt.title('Predicted vs Real price')
-plt.xlabel('Predicted')
-plt.ylabel('Real')
-plt.legend()
-
-plt.show()
-
-
-best_xgb = xbg_q.best_estimator_.named_steps['model']
-feature_importance = best_xgb.feature_importances_
-feature_names = X_train.columns
-
-importance_df = pd.DataFrame({
-    'Feature': feature_names,
-    'Importance': feature_importance
-}).sort_values(by='Importance', ascending=False).reset_index(drop=True)
-
-
-importance_df.head(10)
-
-
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import RandomizedSearchCV
-from scipy.stats import randint, uniform
-import numpy as np
-
-
-param_dist = {
-    f'{prefix}n_estimators': randint(50, 500),
-    f'{prefix}max_depth': randint(1, 10),
-    f'{prefix}min_samples_split': randint(2, 20),
-    f'{prefix}min_samples_leaf': randint(1, 5),
-    f'{prefix}max_features': ['sqrt', 'log2', None],
-    f'{prefix}bootstrap': [True, False],
-    f'{prefix}criterion': ['friedman_mse', 'squared_error', 'poisson'], #{'friedman_mse', 'squared_error', 'absolute_error', 'poisson'}
-}
-
-
-rf = get_pipeline(RandomForestRegressor(random_state=RANDOM_STATE))
-
-
-random_search = RandomizedSearchCV(
-    estimator=rf,
-    param_distributions=param_dist,
-    n_iter=N_ITER,
-    cv=CV,
-    scoring=SCORING,
-    n_jobs=-1,
-    verbose=1,
-    random_state=RANDOM_STATE,
-    return_train_score=True
-)
-
-
-random_search.fit(X_train, Y_train)
-
-print("Best parameters found:")
-print(random_search.best_params_)
-print(f"\nBest cross-validation score: {random_search.best_score_:.3f}")
-
-# Get the best model
-best_rf = random_search.best_estimator_
-
-
-
-Y_predict_train = best_rf.predict(X_train)
-Y_predict_test = best_rf.predict(X_test)
-
-get_metrics(Y_train, Y_predict_train, 'Train')
-results["RandomForestRegressor"] = get_metrics(Y_test, Y_predict_test, 'Test')  
-
-
-
-
-## Add final comparison table for all methods
-pd.set_option('display.float_format', '{:.4f}'.format)
-combined_results = pd.concat(
-    {model: df.T for model, df in results.items()},
-    axis=1
-)
-
-combined_results.columns = combined_results.columns.droplevel(1)
-
-combined_results
