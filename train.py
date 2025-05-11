@@ -58,7 +58,6 @@ os.makedirs(optuna_dir, exist_ok=True)
 random.seed(RANDOM_STATE)
 np.random.seed(RANDOM_STATE)
 
-
 # Simplified build_pipeline, only contains the model
 def build_model_pipeline(model):
     pipeline = Pipeline([("model", model)])
@@ -399,7 +398,6 @@ def train_evaluate_log(
         study_name=study_name,
         direction=OPTUNA_DIRECTION,
         load_if_exists=True,
-        seed=RANDOM_STATE,
         pruner=optuna.pruners.MedianPruner(),
     )
 
