@@ -27,7 +27,11 @@ from sklearn.tree import DecisionTreeRegressor
 from preprocessor import create_data_transformer_pipeline
 from split_data import get_train_test_data, get_train_test_img
 
-logging.basicConfig(level=logging.WARNING, handlers=[logging.StreamHandler()])
+logging.basicConfig(
+    level=logging.WARNING,
+    handlers=[logging.StreamHandler()],
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 logging.getLogger("lightgbm").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
 pd.set_option("display.float_format", "{:.4f}".format)
@@ -58,6 +62,7 @@ os.makedirs(optuna_dir, exist_ok=True)
 random.seed(RANDOM_STATE)
 np.random.seed(RANDOM_STATE)
 
+
 # Simplified build_pipeline, only contains the model
 def build_model_pipeline(model):
     pipeline = Pipeline([("model", model)])
@@ -86,12 +91,6 @@ MODEL_PREFIX = "model__"
 def get_model_configs():
     """Returns a dictionary of models and their hyperparameter search spaces."""
     configs = {
-        # "DecisionTree": {
-        #    "model": DecisionTreeRegressor(random_state=RANDOM_STATE),
-        # },
-        "RandomForest": {
-            "model": RandomForestRegressor(random_state=RANDOM_STATE, n_jobs=-1),
-        },
         "XGBoost": {
             "model": xgb.XGBRegressor(
                 random_state=RANDOM_STATE,
@@ -122,6 +121,12 @@ def get_model_configs():
             "model": AdaBoostRegressor(
                 estimator=DecisionTreeRegressor(max_depth=5), random_state=RANDOM_STATE
             ),
+        },
+        "RandomForest": {
+            "model": RandomForestRegressor(random_state=RANDOM_STATE, n_jobs=-1),
+        },
+        "DecisionTree": {
+            "model": DecisionTreeRegressor(random_state=RANDOM_STATE),
         },
     }
     return configs
@@ -202,10 +207,7 @@ def train_evaluate_log(
                 print(
                     f"Fold {fold_idx}: Error getting feature names from transformer: {e}. Skipping fold."
                 )
-                trial.report(float("inf"), fold_idx)
-                if trial.should_prune():
-                    raise optuna.TrialPruned()
-                # continue # prune or continue
+                continue
 
             # 4. Apply selected features (validate names match output of transformer)
             valid_selected_names_fold = [
@@ -256,10 +258,10 @@ def train_evaluate_log(
                     f"{MODEL_PREFIX}max_depth", 5, 50
                 )
                 params[f"{MODEL_PREFIX}min_samples_split"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}min_samples_split", 2, 21
+                    f"{MODEL_PREFIX}min_samples_split", 5, 30
                 )
                 params[f"{MODEL_PREFIX}min_samples_leaf"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}min_samples_leaf", 1, 21
+                    f"{MODEL_PREFIX}min_samples_leaf", 5, 30
                 )
                 params[f"{MODEL_PREFIX}max_features"] = trial.suggest_categorical(
                     f"{MODEL_PREFIX}max_features", ["sqrt", "log2", 0.5, 0.7, 1.0]
@@ -270,7 +272,7 @@ def train_evaluate_log(
 
             elif model_name in ["XGBoost", "XGBoostQuantile"]:
                 params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}max_depth", 3, 20
+                    f"{MODEL_PREFIX}max_depth", 3, 15
                 )
                 params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
                     f"{MODEL_PREFIX}learning_rate", 0.01, 0.3, log=True
@@ -288,7 +290,7 @@ def train_evaluate_log(
                     f"{MODEL_PREFIX}colsample_bytree", 0.6, 1.0
                 )
                 params[f"{MODEL_PREFIX}gamma"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}gamma", 0, 0.5
+                    f"{MODEL_PREFIX}gamma", 0, 1.0
                 )
                 params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
                     f"{MODEL_PREFIX}reg_lambda", 1e-3, 10.0, log=True
@@ -310,7 +312,7 @@ def train_evaluate_log(
                     f"{MODEL_PREFIX}num_leaves", 20, 100
                 )  # Original: 20, 100
                 params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_categorical(
-                    f"{MODEL_PREFIX}max_depth", [-1, 5, 10, 15, 20]
+                    f"{MODEL_PREFIX}max_depth", [-1, 5, 10, 15, 20, 30]
                 )
                 params[f"{MODEL_PREFIX}min_child_samples"] = trial.suggest_int(
                     f"{MODEL_PREFIX}min_child_samples", 5, 51
@@ -340,12 +342,12 @@ def train_evaluate_log(
                 )
                 params[f"{MODEL_PREFIX}estimator__min_samples_split"] = (
                     trial.suggest_int(
-                        f"{MODEL_PREFIX}estimator__min_samples_split", 2, 21
+                        f"{MODEL_PREFIX}estimator__min_samples_split", 5, 30
                     )
                 )
                 params[f"{MODEL_PREFIX}estimator__min_samples_leaf"] = (
                     trial.suggest_int(
-                        f"{MODEL_PREFIX}estimator__min_samples_leaf", 1, 21
+                        f"{MODEL_PREFIX}estimator__min_samples_leaf", 5, 30
                     )
                 )
 
@@ -371,10 +373,21 @@ def train_evaluate_log(
                     score = mean_absolute_percentage_error(
                         y_fold_val_orig, y_pred_val_orig
                     )
+
+                trial.report(score, fold_idx)
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
                 fold_scores.append(score)
+
+            except optuna.TrialPruned:
+                logging.warning(f"Trial pruned for fold {fold_idx}.")
+                return float("inf") if OPTUNA_DIRECTION == "minimize" else float("-inf")
             except Exception as e:
-                print(f"Trial failed for fold {fold_idx} with error: {e}")
                 logging.error(f"Trial fold failed: {e}", exc_info=True)
+                trial.report(
+                    float("inf") if OPTUNA_DIRECTION == "minimize" else float("-inf"),
+                    fold_idx,
+                )
                 return float("inf") if OPTUNA_DIRECTION == "minimize" else float("-inf")
 
         if not fold_scores:
@@ -547,7 +560,7 @@ def train_evaluate_log(
 
 # %% Main Execution Block
 if __name__ == "__main__":
-    print("--- Starting Experiment with PCA in CV ---")
+    print("--- Starting Experiment ---")
 
     # load data
     X_train_full_raw, X_test_full_raw, Y_train_raw, Y_test_raw = get_train_test_data()
