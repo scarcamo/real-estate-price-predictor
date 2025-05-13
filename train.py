@@ -133,6 +133,129 @@ def get_model_configs():
 
 
 # %% Main Training Function
+
+def get_model_params(model_name, trial):
+    params = {}
+    if model_name == "DecisionTree":
+        params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
+            f"{MODEL_PREFIX}max_depth", 5, 50
+        )
+        params[f"{MODEL_PREFIX}min_samples_split"] = trial.suggest_int(
+            f"{MODEL_PREFIX}min_samples_split", 5, 101
+        )  # Original: 5, 101
+        params[f"{MODEL_PREFIX}min_samples_leaf"] = trial.suggest_int(
+            f"{MODEL_PREFIX}min_samples_leaf", 5, 51
+        )  # Original: 5, 51
+        params[f"{MODEL_PREFIX}max_features"] = trial.suggest_categorical(
+            f"{MODEL_PREFIX}max_features", ["sqrt", "log2", None]
+        )
+        params[f"{MODEL_PREFIX}ccp_alpha"] = trial.suggest_float(
+            f"{MODEL_PREFIX}ccp_alpha", 0.0, 0.05
+        )
+
+    elif model_name == "RandomForest":
+        params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
+            f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
+        )  # Original: 100, 1000, step=50
+        params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
+            f"{MODEL_PREFIX}max_depth", 5, 50
+        )
+        params[f"{MODEL_PREFIX}min_samples_split"] = trial.suggest_int(
+            f"{MODEL_PREFIX}min_samples_split", 5, 30
+        )
+        params[f"{MODEL_PREFIX}min_samples_leaf"] = trial.suggest_int(
+            f"{MODEL_PREFIX}min_samples_leaf", 5, 30
+        )
+        params[f"{MODEL_PREFIX}max_features"] = trial.suggest_categorical(
+            f"{MODEL_PREFIX}max_features", ["sqrt", "log2", 0.5, 0.7, 1.0]
+        )
+        params[f"{MODEL_PREFIX}bootstrap"] = trial.suggest_categorical(
+            f"{MODEL_PREFIX}bootstrap", [True, False]
+        )
+
+    elif model_name in ["XGBoost", "XGBoostQuantile"]:
+        params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
+            f"{MODEL_PREFIX}max_depth", 3, 12 # TODO: test lower like 3,8/10
+        )
+        params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
+            f"{MODEL_PREFIX}learning_rate", 0.01, 0.3, log=True
+        )  # Original: 0.01, 0.5
+        params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
+            f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
+        )  # Original: 100, 1000, step=50
+        params[f"{MODEL_PREFIX}min_child_weight"] = trial.suggest_int(
+            f"{MODEL_PREFIX}min_child_weight", 5, 25
+        )
+        params[f"{MODEL_PREFIX}subsample"] = trial.suggest_float(
+            f"{MODEL_PREFIX}subsample", 0.6, 1.0
+        )
+        params[f"{MODEL_PREFIX}colsample_bytree"] = trial.suggest_float(
+            f"{MODEL_PREFIX}colsample_bytree", 0.6, 1.0
+        )
+        params[f"{MODEL_PREFIX}gamma"] = trial.suggest_float(
+            f"{MODEL_PREFIX}gamma", 0, 2.0 # TODO: test up to 5
+        )
+        params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
+            f"{MODEL_PREFIX}reg_lambda", 1e-3, 10.0, log=True
+        )
+        params[f"{MODEL_PREFIX}reg_alpha"] = trial.suggest_float(
+            f"{MODEL_PREFIX}reg_alpha", 1e-3, 10.0, log=True
+        )
+        # if model_name == "XGBoostQuantile":
+        #     params[f'{MODEL_PREFIX}quantile_alpha'] = trial.suggest_float(f'{MODEL_PREFIX}quantile_alpha', 0.4, 0.6)
+
+    elif model_name == "LightGBM":
+        params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
+            f"{MODEL_PREFIX}learning_rate", 0.01, 0.2, log=True
+        )  # Original: 0.01, 0.2
+        params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
+            f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
+        )  # Original: 100, 1000
+        params[f"{MODEL_PREFIX}num_leaves"] = trial.suggest_int(
+            f"{MODEL_PREFIX}num_leaves", 20, 100
+        )  # Original: 20, 100
+        params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_categorical(
+            f"{MODEL_PREFIX}max_depth", [-1, 5, 10, 15, 20, 30]
+        )
+        params[f"{MODEL_PREFIX}min_child_samples"] = trial.suggest_int(
+            f"{MODEL_PREFIX}min_child_samples", 5, 51
+        )
+        params[f"{MODEL_PREFIX}subsample"] = trial.suggest_float(
+            f"{MODEL_PREFIX}subsample", 0.6, 1.0
+        )
+        params[f"{MODEL_PREFIX}colsample_bytree"] = trial.suggest_float(
+            f"{MODEL_PREFIX}colsample_bytree", 0.6, 1.0
+        )
+        params[f"{MODEL_PREFIX}reg_alpha"] = trial.suggest_float(
+            f"{MODEL_PREFIX}reg_alpha", 1e-3, 10.0, log=True
+        )
+        params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
+            f"{MODEL_PREFIX}reg_lambda", 1e-3, 10.0, log=True
+        )
+
+    elif model_name == "AdaBoost":
+        params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
+            f"{MODEL_PREFIX}n_estimators", 50, 500, step=25
+        )
+        params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
+            f"{MODEL_PREFIX}learning_rate", 0.01, 1.0, log=True
+        )
+        params[f"{MODEL_PREFIX}estimator__max_depth"] = trial.suggest_int(
+            f"{MODEL_PREFIX}estimator__max_depth", 3, 11
+        )
+        params[f"{MODEL_PREFIX}estimator__min_samples_split"] = (
+            trial.suggest_int(
+                f"{MODEL_PREFIX}estimator__min_samples_split", 5, 30
+            )
+        )
+        params[f"{MODEL_PREFIX}estimator__min_samples_leaf"] = (
+            trial.suggest_int(
+                f"{MODEL_PREFIX}estimator__min_samples_leaf", 5, 30
+            )
+        )
+
+    return params
+
 def train_evaluate_log(
     model_name,
     model_config,
@@ -151,14 +274,15 @@ def train_evaluate_log(
     cv_strategy,
     parent_run_id=None,
 ):
-    print(f"\n--- Tuning {model_name} with Optuna ---")
+    logging.info(f"Tuning {model_name} with Optuna")
     start_time = time.time()
 
     base_model = model_config["model"]
 
-    # --- Define Optuna Objective Function ---
+    # Define Optuna Objective Function
     def objective(trial):
         fold_scores = []
+        
         # Manual CV loop to handle per-fold preprocessing
         for fold_idx, (train_idx, val_idx) in enumerate(
             cv_strategy.split(X_train_raw_full, Y_train_log)
@@ -169,7 +293,6 @@ def train_evaluate_log(
             y_fold_val_log = Y_train_log.iloc[val_idx]
 
             # 1. Create and fit data_transformer for the current fold's training data
-            # Ensure APPLY_SCALE_TRANSFORM_IN_PIPELINE is used consistently
             current_data_transformer = create_data_transformer_pipeline(
                 numeric_cols=numeric_cols_original,
                 categorical_cols=categorical_cols_original,
@@ -231,125 +354,7 @@ def train_evaluate_log(
             X_fold_val_selected = X_fold_val_processed_df[valid_selected_names_fold]
 
             # 5. Define model and pipeline for Optuna trial parameters
-            params = {}
-
-            if model_name == "DecisionTree":
-                params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}max_depth", 5, 50
-                )
-                params[f"{MODEL_PREFIX}min_samples_split"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}min_samples_split", 5, 101
-                )  # Original: 5, 101
-                params[f"{MODEL_PREFIX}min_samples_leaf"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}min_samples_leaf", 5, 51
-                )  # Original: 5, 51
-                params[f"{MODEL_PREFIX}max_features"] = trial.suggest_categorical(
-                    f"{MODEL_PREFIX}max_features", ["sqrt", "log2", None]
-                )
-                params[f"{MODEL_PREFIX}ccp_alpha"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}ccp_alpha", 0.0, 0.05
-                )
-
-            elif model_name == "RandomForest":
-                params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
-                )  # Original: 100, 1000, step=50
-                params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}max_depth", 5, 50
-                )
-                params[f"{MODEL_PREFIX}min_samples_split"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}min_samples_split", 5, 30
-                )
-                params[f"{MODEL_PREFIX}min_samples_leaf"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}min_samples_leaf", 5, 30
-                )
-                params[f"{MODEL_PREFIX}max_features"] = trial.suggest_categorical(
-                    f"{MODEL_PREFIX}max_features", ["sqrt", "log2", 0.5, 0.7, 1.0]
-                )
-                params[f"{MODEL_PREFIX}bootstrap"] = trial.suggest_categorical(
-                    f"{MODEL_PREFIX}bootstrap", [True, False]
-                )
-
-            elif model_name in ["XGBoost", "XGBoostQuantile"]:
-                params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}max_depth", 3, 15
-                )
-                params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}learning_rate", 0.01, 0.3, log=True
-                )  # Original: 0.01, 0.5
-                params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
-                )  # Original: 100, 1000, step=50
-                params[f"{MODEL_PREFIX}min_child_weight"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}min_child_weight", 1, 11
-                )
-                params[f"{MODEL_PREFIX}subsample"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}subsample", 0.6, 1.0
-                )
-                params[f"{MODEL_PREFIX}colsample_bytree"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}colsample_bytree", 0.6, 1.0
-                )
-                params[f"{MODEL_PREFIX}gamma"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}gamma", 0, 1.0
-                )
-                params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}reg_lambda", 1e-3, 10.0, log=True
-                )
-                params[f"{MODEL_PREFIX}reg_alpha"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}reg_alpha", 1e-3, 10.0, log=True
-                )
-                # if model_name == "XGBoostQuantile":
-                #     params[f'{MODEL_PREFIX}quantile_alpha'] = trial.suggest_float(f'{MODEL_PREFIX}quantile_alpha', 0.4, 0.6)
-
-            elif model_name == "LightGBM":
-                params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}learning_rate", 0.01, 0.2, log=True
-                )  # Original: 0.01, 0.2
-                params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
-                )  # Original: 100, 1000
-                params[f"{MODEL_PREFIX}num_leaves"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}num_leaves", 20, 100
-                )  # Original: 20, 100
-                params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_categorical(
-                    f"{MODEL_PREFIX}max_depth", [-1, 5, 10, 15, 20, 30]
-                )
-                params[f"{MODEL_PREFIX}min_child_samples"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}min_child_samples", 5, 51
-                )
-                params[f"{MODEL_PREFIX}subsample"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}subsample", 0.6, 1.0
-                )
-                params[f"{MODEL_PREFIX}colsample_bytree"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}colsample_bytree", 0.6, 1.0
-                )
-                params[f"{MODEL_PREFIX}reg_alpha"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}reg_alpha", 1e-3, 10.0, log=True
-                )
-                params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}reg_lambda", 1e-3, 10.0, log=True
-                )
-
-            elif model_name == "AdaBoost":
-                params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}n_estimators", 50, 500, step=25
-                )
-                params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
-                    f"{MODEL_PREFIX}learning_rate", 0.01, 1.0, log=True
-                )
-                params[f"{MODEL_PREFIX}estimator__max_depth"] = trial.suggest_int(
-                    f"{MODEL_PREFIX}estimator__max_depth", 3, 11
-                )
-                params[f"{MODEL_PREFIX}estimator__min_samples_split"] = (
-                    trial.suggest_int(
-                        f"{MODEL_PREFIX}estimator__min_samples_split", 5, 30
-                    )
-                )
-                params[f"{MODEL_PREFIX}estimator__min_samples_leaf"] = (
-                    trial.suggest_int(
-                        f"{MODEL_PREFIX}estimator__min_samples_leaf", 5, 30
-                    )
-                )
+            params = get_model_params(model_name, trial)
 
             trial_model_instance = model_config["model"]  # Fresh instance
             model_pipeline = build_model_pipeline(trial_model_instance)
@@ -487,6 +492,7 @@ def train_evaluate_log(
     best_model_pipeline = build_model_pipeline(final_model_instance)
     best_model_pipeline.set_params(**best_params_optuna)
     best_model_pipeline.fit(X_train_selected_final, Y_train_log)
+
     print("Final model training complete.")
 
     # --- Evaluate Final Model ---
