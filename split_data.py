@@ -57,7 +57,7 @@ def stratified_split(df, features, target, test_size=0.2, random_state=RANDOM_ST
     return X_train, X_test, Y_train, Y_test
 
 
-def get_train_test_data(include_img=True) -> tuple:
+def get_train_test_data(include_img=True, include_count=True) -> tuple:
     """Loads the data and splits it into train and test sets."""
     X_train = pd.read_csv(os.path.join("data", "X_train.csv"), index_col=0)
     X_test = pd.read_csv(os.path.join("data", "X_test.csv"), index_col=0)
@@ -74,6 +74,12 @@ def get_train_test_data(include_img=True) -> tuple:
         img_cols = X_train.filter(regex='img_|feature_|vector_|interior_|exterior_').columns.tolist()
         X_train.drop(columns=img_cols, inplace=True, errors="raise")
         X_test.drop(columns=img_cols, inplace=True, errors="raise")
+
+    if not include_count:
+        # Drop count columns if they exist
+        count_cols = X_train.filter(regex='count_').columns.tolist()
+        X_train.drop(columns=count_cols, inplace=True, errors="raise")
+        X_test.drop(columns=count_cols, inplace=True, errors="raise")
 
     return X_train, X_test, y_train, y_test
 
