@@ -4,18 +4,26 @@ import os
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.feature_selection import RFE, SelectFromModel, RFECV
-
+from sklearn.feature_selection import RFE, RFECV, SelectFromModel
 from sklearn.inspection import permutation_importance
+from sklearn.model_selection import KFold
 
+from config import load_config
 from preprocessor import create_data_transformer_pipeline
 from split_data import get_train_test_data, get_train_test_img
 
-TARGET_COLUMN = "price"
-RANDOM_STATE = 42
-APPLY_SCALE_TRANSFORM = True
-N_ESTIMATORS = 100
-OUTPUT_DIR = "selected_features"
+config = load_config()
+
+TARGET_VARIABLE = config.get("TARGET_VARIABLE")
+RANDOM_STATE = config.get("RANDOM_STATE")
+APPLY_SCALE_TRANSFORM = config.get("APPLY_SCALE_TRANSFORM")
+N_ESTIMATORS = config.get("N_ESTIMATORS")
+OUTPUT_DIR = config.get("SELECTED_FEATURES_DIR")
+APPLY_PCA_IMG_TRANSFORM = config.get("APPLY_PCA_IMG_TRANSFORM")
+VERBOSE = 1
+
+N_FEATURES = config.get("N_FEATURES", 100)
+RFE_STEP_SIZE = config.get("RFE_STEP_SIZE", 0.1)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -72,6 +80,7 @@ def run_feature_selection(
         district_group_col=district_col_name,
         outlier_indicator_col=outlier_col_name,
         apply_scaling_and_transform=APPLY_SCALE_TRANSFORM,
+        apply_pca=APPLY_PCA_IMG_TRANSFORM,
     )
 
     print("Fitting data transformer on X_train for feature selection...")
@@ -107,6 +116,7 @@ def run_feature_selection(
         X_test_processed = X_test_processed_np
         processed_feature_names = None
 
+    print( f"X_train_processed shape: {X_train_processed.shape}")
     print(f"Performing feature selection {method}...")
 
     ##### DO feature selection #####
@@ -125,18 +135,44 @@ def run_feature_selection(
         selected_features_mask = selector.get_support()
 
         output_filename = (
-            f"rf_thresh_{str(threshold).replace('.', 'p')}.json"
+            f"rf_thresh_{str(threshold).replace('.', 'p')}{'_pca' if APPLY_PCA_IMG_TRANSFORM else '_non_pca'}.json"
         )
     elif method == "rfe":
         selector_estimator = RandomForestRegressor(
             n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE, n_jobs=-1
         )
-        selector = RFE(selector_estimator, n_features_to_select=n_features, step=1)
+        selector = RFE(selector_estimator, n_features_to_select=n_features, step=RFE_STEP_SIZE, verbose=VERBOSE)
 
         selector.fit(X_train_processed, y_train)
         selected_features_mask = selector.get_support()
 
-        output_filename = f"rfe_{n_features}.json"
+        output_filename = f"rfe_{n_features}{'_pca' if APPLY_PCA_IMG_TRANSFORM else '_non_pca'}.json"
+
+    elif method == "rfecv":
+        rf_estimator = RandomForestRegressor(n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE, n_jobs=-1) 
+
+        cv_strategy = KFold(n_splits=5, shuffle=True, random_state=42) 
+    
+        selector = RFECV(estimator=rf_estimator,
+                       step=RFE_STEP_SIZE, 
+                       cv=cv_strategy,
+                       scoring='neg_mean_squared_error',
+                       min_features_to_select=1,
+                       n_jobs=-1,
+                       verbose=1)
+
+        print("Starting RFECV to find optimal number of features...")
+        selector.fit(X_train_processed, y_train)
+        print("RFECV completed.")
+
+        n_features = selector.n_features_
+        print(f"\nOptimal number of features found: {n_features}")
+
+        selected_features_mask = selector.get_support()
+
+        output_filename = (
+            f"rfecv_{n_features}{'_pca' if APPLY_PCA_IMG_TRANSFORM else '_non_pca'}{'_scaled' if APPLY_SCALE_TRANSFORM else ''}.json"
+        )
 
     elif method == "permutation_importance":
         model_for_permutation = RandomForestRegressor(
@@ -163,11 +199,11 @@ def run_feature_selection(
         selected_features_mask = np.zeros(X_train_processed.shape[1], dtype=bool)
         selected_features_mask[selected_indices_perm] = True
 
-        output_filename = f"permutation_importance_{num_features_to_select_perm}.json"
+        output_filename = f"permutation_importance_{num_features_to_select_perm}{'_pca' if APPLY_PCA_IMG_TRANSFORM else '_non_pca'}.json"
 
     elif method == "lasso":
         output_filename = (
-            f"lasso_alpha_{str(alpha_lasso).replace('.', 'p')}.json"
+            f"lasso_alpha_{str(alpha_lasso).replace('.', 'p')}{'_pca' if APPLY_PCA_IMG_TRANSFORM else '_non_pca'}.json"
         )
         raise ValueError("Lasso method not implemented yet.")
     else:
@@ -210,18 +246,20 @@ def make_features():
     export_selected_features("base_cols.json", base_cols)
     export_selected_features("base_poi.json", base_cols + poi_cols)
     export_selected_features("base_pano.json", base_cols + pano_cols)
+    export_selected_features("base_poi_pano.json", base_cols + poi_cols + pano_cols)
+    export_selected_features("base_poi_pano.json", base_cols + poi_cols + pano_cols)
 
 
 if __name__ == "__main__":
-    run_feature_selection(
-        method="rf",
-        threshold="median",
-        output_dir=OUTPUT_DIR,
-    )
+    # run_feature_selection(
+    #     method="rf",
+    #     threshold="median",
+    #     output_dir=OUTPUT_DIR,
+    # )
 
     run_feature_selection(
-        method="rfe",
-        n_features=100,
+        method="rfecv",
+        n_features=N_FEATURES,
         output_dir=OUTPUT_DIR,
     )
 
