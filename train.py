@@ -19,6 +19,7 @@ import pandas as pd
 import xgboost as xgb
 from optuna.integration import MLflowCallback
 from sklearn.ensemble import AdaBoostRegressor, RandomForestRegressor
+from sklearn.linear_model import ElasticNet, Lasso, Ridge
 from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
@@ -26,6 +27,8 @@ from sklearn.tree import DecisionTreeRegressor
 
 from preprocessor import create_data_transformer_pipeline
 from split_data import get_train_test_data, get_train_test_img
+from config import load_config
+
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -37,23 +40,34 @@ warnings.filterwarnings("ignore")
 pd.set_option("display.float_format", "{:.4f}".format)
 
 # %% Configuration Constants
-RANDOM_STATE = 42
-N_TRIALS_OPTUNA = 100
-CV_FOLDS = 5
-TARGET_VARIABLE = "price"
-TUNING_SCORING_METRIC = "mape"
-OPTUNA_DIRECTION = "minimize"
+config = load_config()
+
+TARGET_VARIABLE = config.get("TARGET_VARIABLE")
+RANDOM_STATE = config.get("RANDOM_STATE")
+N_TRIALS_OPTUNA = config.get("N_TRIALS_OPTUNA")
+CV_FOLDS = config.get("CV_FOLDS")
+TUNING_SCORING_METRIC = config.get("TUNING_SCORING_METRIC")
+OPTUNA_DIRECTION = config.get("OPTUNA_DIRECTION")
 MLFLOW_CALLBACK_METRIC_NAME = f"cv_{TUNING_SCORING_METRIC}"
 
+APPLY_SCALE_TRANSFORM = config.get("APPLY_SCALE_TRANSFORM")
+APPLY_PCA_IMG_TRANSFORM = config.get("APPLY_PCA_IMG_TRANSFORM")
+N_PCA_COMPONENTS = config.get("N_PCA_COMPONENTS")
 
-APPLY_SCALE_TRANSFORM_IN_PIPELINE = False
+# used for feature selection, log the parameters
+N_ESTIMATORS = config.get("N_ESTIMATORS")
+RFE_STEP_SIZE = config.get("RFE_STEP_SIZE")
 
-optuna_dir = "optuna_studies"
+optuna_dir = config.get('optuna_dir')
 db_file = "tuning.db"
 STUDY_DB_PATH = f"sqlite:///{os.path.join(optuna_dir, db_file)}"
-ARTIFACT_PATH = "models_and_artifacts"
-MLFLOW_EXPERIMENT_NAME = "Real Estate Price Prediction"
-SELECTED_FEATURES_PATH = "selected_features.json"
+ARTIFACT_PATH = config.get('ARTIFACT_PATH') 
+SELECTED_FEATURES_FOLDER =  config.get('SELECTED_FEATURES_DIR') 
+SELECTED_FEATURES_NAME = f"rfecv_36{'_pca' if APPLY_PCA_IMG_TRANSFORM else '_non_pca'}{'_scaled' if APPLY_SCALE_TRANSFORM else ''}"
+
+MLFLOW_EXPERIMENT_NAME = f"Flat price predictor - {TARGET_VARIABLE} - {SELECTED_FEATURES_NAME} {'_scale' if APPLY_SCALE_TRANSFORM else ''}"
+
+SELECTED_FEATURES_PATH = f"{SELECTED_FEATURES_NAME}.json"
 
 os.makedirs(ARTIFACT_PATH, exist_ok=True)
 os.makedirs(optuna_dir, exist_ok=True)
@@ -91,6 +105,15 @@ MODEL_PREFIX = "model__"
 def get_model_configs():
     """Returns a dictionary of models and their hyperparameter search spaces."""
     configs = {
+        "LightGBM": {
+            "model": lgb.LGBMRegressor(
+                random_state=RANDOM_STATE,
+                objective="regression",
+                metric="mape",  # LGBM internal metric
+                n_jobs=-1,
+                verbose=-1,
+            ),
+        },
         "XGBoost": {
             "model": xgb.XGBRegressor(
                 random_state=RANDOM_STATE,
@@ -108,31 +131,34 @@ def get_model_configs():
                 n_jobs=-1,
             ),
         },
-        "LightGBM": {
-            "model": lgb.LGBMRegressor(
-                random_state=RANDOM_STATE,
-                objective="regression",
-                metric="mape",  # LGBM internal metric
-                n_jobs=-1,
-                verbose=-1,
-            ),
-        },
-        "AdaBoost": {
-            "model": AdaBoostRegressor(
-                estimator=DecisionTreeRegressor(max_depth=5), random_state=RANDOM_STATE
-            ),
-        },
+
+        # "AdaBoost": {
+        #     "model": AdaBoostRegressor(
+        #         estimator=DecisionTreeRegressor(max_depth=5), random_state=RANDOM_STATE
+        #     ),
+        # },
         "RandomForest": {
             "model": RandomForestRegressor(random_state=RANDOM_STATE, n_jobs=-1),
         },
-        "DecisionTree": {
-            "model": DecisionTreeRegressor(random_state=RANDOM_STATE),
-        },
+        # "Lasso": {
+        #     "model": Lasso(random_state=RANDOM_STATE, max_iter=10000),
+        # },
+        # "Ridge": {
+        #     "model": Ridge(random_state=RANDOM_STATE),
+        # },
+        # "ElasticNet": {
+        #     "model": ElasticNet(random_state=RANDOM_STATE, max_iter=10000),
+        # },
+        # "DecisionTree": {
+        #     "model": DecisionTreeRegressor(random_state=RANDOM_STATE),
+        # },
+
     }
     return configs
 
 
 # %% Main Training Function
+
 
 def get_model_params(model_name, trial):
     params = {}
@@ -158,13 +184,13 @@ def get_model_params(model_name, trial):
             f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
         )  # Original: 100, 1000, step=50
         params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
-            f"{MODEL_PREFIX}max_depth", 5, 50
+            f"{MODEL_PREFIX}max_depth", 5, 20
         )
         params[f"{MODEL_PREFIX}min_samples_split"] = trial.suggest_int(
-            f"{MODEL_PREFIX}min_samples_split", 5, 30
+            f"{MODEL_PREFIX}min_samples_split", 5, 50
         )
         params[f"{MODEL_PREFIX}min_samples_leaf"] = trial.suggest_int(
-            f"{MODEL_PREFIX}min_samples_leaf", 5, 30
+            f"{MODEL_PREFIX}min_samples_leaf", 5, 50
         )
         params[f"{MODEL_PREFIX}max_features"] = trial.suggest_categorical(
             f"{MODEL_PREFIX}max_features", ["sqrt", "log2", 0.5, 0.7, 1.0]
@@ -175,7 +201,9 @@ def get_model_params(model_name, trial):
 
     elif model_name in ["XGBoost", "XGBoostQuantile"]:
         params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
-            f"{MODEL_PREFIX}max_depth", 3, 12 # TODO: test lower like 3,8/10
+            f"{MODEL_PREFIX}max_depth",
+            3,
+            8,  # TODO: test lower like 3,8/10
         )
         params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
             f"{MODEL_PREFIX}learning_rate", 0.01, 0.3, log=True
@@ -184,7 +212,7 @@ def get_model_params(model_name, trial):
             f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
         )  # Original: 100, 1000, step=50
         params[f"{MODEL_PREFIX}min_child_weight"] = trial.suggest_int(
-            f"{MODEL_PREFIX}min_child_weight", 5, 25
+            f"{MODEL_PREFIX}min_child_weight", 5, 50 # 5-25 was ok
         )
         params[f"{MODEL_PREFIX}subsample"] = trial.suggest_float(
             f"{MODEL_PREFIX}subsample", 0.6, 1.0
@@ -193,29 +221,31 @@ def get_model_params(model_name, trial):
             f"{MODEL_PREFIX}colsample_bytree", 0.6, 1.0
         )
         params[f"{MODEL_PREFIX}gamma"] = trial.suggest_float(
-            f"{MODEL_PREFIX}gamma", 0, 2.0 # TODO: test up to 5
+            f"{MODEL_PREFIX}gamma",
+            0,
+            5.0, 
         )
         params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
-            f"{MODEL_PREFIX}reg_lambda", 1e-3, 10.0, log=True
+            f"{MODEL_PREFIX}reg_lambda", 1e-2, 50.0, log=True
         )
         params[f"{MODEL_PREFIX}reg_alpha"] = trial.suggest_float(
-            f"{MODEL_PREFIX}reg_alpha", 1e-3, 10.0, log=True
+            f"{MODEL_PREFIX}reg_alpha", 1e-2, 50.0, log=True
         )
         # if model_name == "XGBoostQuantile":
         #     params[f'{MODEL_PREFIX}quantile_alpha'] = trial.suggest_float(f'{MODEL_PREFIX}quantile_alpha', 0.4, 0.6)
 
     elif model_name == "LightGBM":
         params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
-            f"{MODEL_PREFIX}learning_rate", 0.01, 0.2, log=True
-        )  # Original: 0.01, 0.2
+            f"{MODEL_PREFIX}learning_rate", 0.01, 0.3, log=True
+        )  # TODO: test broader ranges
         params[f"{MODEL_PREFIX}n_estimators"] = trial.suggest_int(
-            f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
-        )  # Original: 100, 1000
+            f"{MODEL_PREFIX}n_estimators", 400, 1500, step=50
+        )
         params[f"{MODEL_PREFIX}num_leaves"] = trial.suggest_int(
             f"{MODEL_PREFIX}num_leaves", 20, 100
-        )  # Original: 20, 100
-        params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_categorical(
-            f"{MODEL_PREFIX}max_depth", [-1, 5, 10, 15, 20, 30]
+        )
+        params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
+            f"{MODEL_PREFIX}max_depth", 5, 30
         )
         params[f"{MODEL_PREFIX}min_child_samples"] = trial.suggest_int(
             f"{MODEL_PREFIX}min_child_samples", 5, 51
@@ -224,13 +254,13 @@ def get_model_params(model_name, trial):
             f"{MODEL_PREFIX}subsample", 0.6, 1.0
         )
         params[f"{MODEL_PREFIX}colsample_bytree"] = trial.suggest_float(
-            f"{MODEL_PREFIX}colsample_bytree", 0.6, 1.0
+            f"{MODEL_PREFIX}colsample_bytree", 0.5, 1.0
         )
         params[f"{MODEL_PREFIX}reg_alpha"] = trial.suggest_float(
-            f"{MODEL_PREFIX}reg_alpha", 1e-3, 10.0, log=True
+            f"{MODEL_PREFIX}reg_alpha", 1e-2, 50.0, log=True
         )
         params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
-            f"{MODEL_PREFIX}reg_lambda", 1e-3, 10.0, log=True
+            f"{MODEL_PREFIX}reg_lambda", 1e-2, 50.0, log=True
         )
 
     elif model_name == "AdaBoost":
@@ -243,18 +273,26 @@ def get_model_params(model_name, trial):
         params[f"{MODEL_PREFIX}estimator__max_depth"] = trial.suggest_int(
             f"{MODEL_PREFIX}estimator__max_depth", 3, 11
         )
-        params[f"{MODEL_PREFIX}estimator__min_samples_split"] = (
-            trial.suggest_int(
-                f"{MODEL_PREFIX}estimator__min_samples_split", 5, 30
-            )
+        params[f"{MODEL_PREFIX}estimator__min_samples_split"] = trial.suggest_int(
+            f"{MODEL_PREFIX}estimator__min_samples_split", 5, 30
         )
-        params[f"{MODEL_PREFIX}estimator__min_samples_leaf"] = (
-            trial.suggest_int(
-                f"{MODEL_PREFIX}estimator__min_samples_leaf", 5, 30
-            )
+        params[f"{MODEL_PREFIX}estimator__min_samples_leaf"] = trial.suggest_int(
+            f"{MODEL_PREFIX}estimator__min_samples_leaf", 5, 30
         )
+    elif model_name in ["Lasso", "Ridge"]:
+        params[f"{MODEL_PREFIX}alpha"] = trial.suggest_float(
+            f"{MODEL_PREFIX}alpha", 1e-4, 10.0, log=True
+        )
+    elif model_name == "ElasticNet":
+        params[f"{MODEL_PREFIX}alpha"] = trial.suggest_float(
+            f"{MODEL_PREFIX}alpha", 1e-4, 10.0, log=True
+        )
+        params[f"{MODEL_PREFIX}l1_ratio"] = trial.suggest_float(
+            f"{MODEL_PREFIX}l1_ratio", 0.05, 0.95
+        ) # l1_ratio = 0 is Ridge, l1_ratio = 1 is Lasso
 
     return params
+
 
 def train_evaluate_log(
     model_name,
@@ -270,7 +308,7 @@ def train_evaluate_log(
     img_cols_original,
     district_col_name_original,
     outlier_col_name_original,
-    selected_feature_names,  # Loaded from JSON
+    selected_feature_names,
     cv_strategy,
     parent_run_id=None,
 ):
@@ -282,7 +320,7 @@ def train_evaluate_log(
     # Define Optuna Objective Function
     def objective(trial):
         fold_scores = []
-        
+
         # Manual CV loop to handle per-fold preprocessing
         for fold_idx, (train_idx, val_idx) in enumerate(
             cv_strategy.split(X_train_raw_full, Y_train_log)
@@ -299,7 +337,8 @@ def train_evaluate_log(
                 img_feature_cols=img_cols_original,
                 district_group_col=district_col_name_original,
                 outlier_indicator_col=outlier_col_name_original,
-                apply_scaling_and_transform=APPLY_SCALE_TRANSFORM_IN_PIPELINE,
+                apply_scaling_and_transform=APPLY_SCALE_TRANSFORM,
+                apply_pca=APPLY_PCA_IMG_TRANSFORM,
             )
             current_data_transformer.fit(X_fold_train_raw.copy(), y_fold_train_log)
 
@@ -385,14 +424,14 @@ def train_evaluate_log(
                 fold_scores.append(score)
 
             except optuna.TrialPruned:
-                logging.warning(f"Trial pruned for fold {fold_idx}.")
+                logging.warning(f"Trial pruned for fold {fold_idx}. With score {score:.4f}")
                 return float("inf") if OPTUNA_DIRECTION == "minimize" else float("-inf")
             except Exception as e:
                 logging.error(f"Trial fold failed: {e}", exc_info=True)
-                trial.report(
-                    float("inf") if OPTUNA_DIRECTION == "minimize" else float("-inf"),
-                    fold_idx,
-                )
+                # trial.report(
+                #     float("inf") if OPTUNA_DIRECTION == "minimize" else float("-inf"),
+                #     fold_idx,
+                # )
                 return float("inf") if OPTUNA_DIRECTION == "minimize" else float("-inf")
 
         if not fold_scores:
@@ -400,15 +439,16 @@ def train_evaluate_log(
         return np.mean(fold_scores)
 
     # Optuna Study Setup
-    study_name = f"{model_name}_selected_features_study"
+    study_name = f"{model_name}_{SELECTED_FEATURES_NAME}_study"
     print(f"Using Optuna study '{study_name}' with storage '{STUDY_DB_PATH}'")
 
     mlflow_callback = MLflowCallback(
         tracking_uri=mlflow.get_tracking_uri(),
+        create_experiment=True, # TODO: check if is better with False
         metric_name=MLFLOW_CALLBACK_METRIC_NAME,
         tag_study_user_attrs=True,
         tag_trial_user_attrs=True,
-        mlflow_kwargs={"nested": True},
+        mlflow_kwargs={"nested": True}, # , "tags": {}
     )
 
     study = optuna.create_study(
@@ -447,7 +487,8 @@ def train_evaluate_log(
         img_feature_cols=img_cols_original,
         district_group_col=district_col_name_original,
         outlier_indicator_col=outlier_col_name_original,
-        apply_scaling_and_transform=APPLY_SCALE_TRANSFORM_IN_PIPELINE,
+        apply_scaling_and_transform=APPLY_SCALE_TRANSFORM,
+        apply_pca=APPLY_PCA_IMG_TRANSFORM,
     )
     final_data_transformer.fit(X_train_raw_full.copy(), Y_train_log)
 
@@ -514,17 +555,33 @@ def train_evaluate_log(
         run_tags["mlflow.parentRunId"] = parent_run_id
 
     with mlflow.start_run(
-        run_name=f"{model_name}_SelectedFeatures_PCA_in_CV_BEST",
+        run_name=f"{model_name}_{SELECTED_FEATURES_NAME}_BEST",
         tags=run_tags,
         nested=True,
     ) as run:
         final_run_id_logged = run.info.run_id
-        mlflow.set_tag("run_type", "best_run_pca_in_cv")
+        mlflow.set_tag("run_type", "best_run")
+
         mlflow.log_param("model_name", model_name)
+        mlflow.log_param("feature_set", SELECTED_FEATURES_NAME)        
         mlflow.log_param("num_selected_features", len(final_valid_selected_names))
         mlflow.log_params(
-            {k.replace(MODEL_PREFIX, ""): v for k, v in best_params_optuna.items()}
+            {k: v for k, v in best_params_optuna.items()}
         )
+
+        mlflow.log_param("cv_folds", CV_FOLDS)
+        mlflow.log_param("random_state", RANDOM_STATE)
+        mlflow.log_param("n_trials_optuna", N_TRIALS_OPTUNA)
+        mlflow.log_param("tuning_scoring_metric", TUNING_SCORING_METRIC)
+        mlflow.log_param("optuna_direction", OPTUNA_DIRECTION)
+        mlflow.log_param("apply_scale_transform", APPLY_SCALE_TRANSFORM)
+        mlflow.log_param("apply_pca_img_transform", APPLY_PCA_IMG_TRANSFORM)
+        mlflow.log_param("n_pca_components", N_PCA_COMPONENTS)
+        mlflow.log_param("fs_rfe_step_size", RFE_STEP_SIZE)
+        mlflow.log_param("fs_n_estimators", N_ESTIMATORS)
+        
+
+        mlflow.log_metric(MLFLOW_CALLBACK_METRIC_NAME, best_score_optuna)
         mlflow.log_metric(f"best_optuna_cv_{TUNING_SCORING_METRIC}", best_score_optuna)
         mlflow.log_metrics(train_metrics)
         mlflow.log_metrics(test_metrics)
@@ -606,7 +663,7 @@ if __name__ == "__main__":
 
     print(f"\nLoading selected feature names from {SELECTED_FEATURES_PATH}...")
     try:
-        with open(SELECTED_FEATURES_PATH, "r") as f:
+        with open(os.path.join(SELECTED_FEATURES_FOLDER, SELECTED_FEATURES_PATH), "r") as f:
             selected_features_names = json.load(f)
         if not (
             isinstance(selected_features_names, list)
@@ -632,14 +689,24 @@ if __name__ == "__main__":
     mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
     print(f"Using MLflow Experiment: '{MLFLOW_EXPERIMENT_NAME}'")
 
-    with mlflow.start_run(run_name="Main_Experiment_Run_PCA_in_CV") as main_run:
+    with mlflow.start_run(run_name=f"Main_Run_{SELECTED_FEATURES_NAME}") as main_run:
         print(f"Main Run ID: {main_run.info.run_id}")
-        mlflow.log_param("RANDOM_STATE", RANDOM_STATE)
-        mlflow.log_param("CV_FOLDS", CV_FOLDS)
+        mlflow.log_param("random_state", RANDOM_STATE)
+        mlflow.log_param("cv_folds", CV_FOLDS)
         mlflow.log_param(
-            "APPLY_SCALE_TRANSFORM_IN_PIPELINE", APPLY_SCALE_TRANSFORM_IN_PIPELINE
+            "apply_scale_transform", APPLY_SCALE_TRANSFORM
         )
-        mlflow.log_param("N_TRIALS_OPTUNA", N_TRIALS_OPTUNA)
+
+
+        mlflow.log_param("n_trials_optuna", N_TRIALS_OPTUNA)
+
+        mlflow.log_param("tuning_scoring_metric", TUNING_SCORING_METRIC)
+        mlflow.log_param("optuna_direction", OPTUNA_DIRECTION)
+        mlflow.log_param("apply_scale_transform", APPLY_SCALE_TRANSFORM)
+        mlflow.log_param("apply_pca_img_transform", APPLY_PCA_IMG_TRANSFORM)
+        mlflow.log_param("n_pca_components", N_PCA_COMPONENTS)
+        mlflow.log_param("fs_rfe_step_size", RFE_STEP_SIZE)
+        mlflow.log_param("fs_n_estimators", N_ESTIMATORS)
 
         mlflow.log_param("num_initial_numeric_features", len(original_numeric_cols))
         mlflow.log_param(
@@ -649,6 +716,7 @@ if __name__ == "__main__":
         mlflow.log_param(
             "num_loaded_selected_feature_names", len(selected_features_names)
         )
+        mlflow.log_param("feature_set", SELECTED_FEATURES_PATH)
 
         for model_name, config in model_configs.items():
             try:
