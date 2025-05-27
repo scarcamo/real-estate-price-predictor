@@ -1,0 +1,35 @@
+# Configuration Constants
+RANDOM_STATE: 42
+N_TRIALS_OPTUNA: 500
+CV_FOLDS: 5
+TARGET_VARIABLE: "price"
+TUNING_SCORING_METRIC: "mape"
+OPTUNA_DIRECTION: "minimize"
+MLFLOW_CALLBACK_METRIC_NAME: "cv_mape"
+
+APPLY_SCALE_TRANSFORM: True
+APPLY_PCA_IMG_TRANSFORM: True
+
+# feature selection
+N_ESTIMATORS: 100
+RFE_STEP_SIZE: 0.1
+N_PCA_COMPONENTS: 0.8
+
+optuna_dir: "optuna_studies"
+db_file: "tuning.db"
+STUDY_DB_PATH: "sqlite:///${optuna_dir}/${db_file}"
+ARTIFACT_PATH: "models_and_artifacts"
+MLFLOW_EXPERIMENT_NAME: "Real Estate Price Prediction"
+SELECTED_FEATURES_DIR: "selected_features"
+
+# Model Definitions and Hyperparameter Spaces
+MODEL_PREFIX: "model__"
+
+column_definitions:
+  target_variable_name: "price"
+  district_column_name: "district"
+  outlier_column_name: "outlier"
+
+data_paths:
+  train_test_data: "data"
+  train_test_img: "data" 

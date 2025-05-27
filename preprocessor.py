@@ -1,3 +1,4 @@
+import logging
 import warnings
 
 import numpy as np
@@ -14,6 +15,11 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
+from config import load_config
+
+config = load_config()
+
+N_PCA_COMPONENTS = config.get("N_PCA_COMPONENTS")
 
 class GroupedMedianImputer(BaseEstimator, TransformerMixin):
     """
@@ -119,6 +125,7 @@ def create_data_transformer_pipeline(
     district_group_col,
     outlier_indicator_col,
     apply_scaling_and_transform=False,
+    apply_pca=True,
 ):
     """
     Pipeline that handles all data preprocessing:
@@ -164,14 +171,19 @@ def create_data_transformer_pipeline(
     )
 
     # Image features pipeline
-    n_pca_components = 50
 
-    image_pipeline = Pipeline(
-        [
+    image_pipeline_steps = [
             ("imputer", SimpleImputer(strategy="median")),
             ("scaler", StandardScaler()),
-            ("pca", PCA(n_components=n_pca_components)),
         ]
+
+    if apply_pca:
+        logging.debug("Applying PCA to image features with n_components = %d", N_PCA_COMPONENTS)
+        n_pca_components = N_PCA_COMPONENTS
+        image_pipeline_steps.append(("pca", PCA(n_components=n_pca_components)))
+
+    image_pipeline = Pipeline(
+       image_pipeline_steps
     )
 
     # Combine all transformers into a list for ColumnTransformer
