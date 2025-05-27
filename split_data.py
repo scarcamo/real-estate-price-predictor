@@ -3,7 +3,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 
-TARGET_COLUMN = "price"
+TARGET_VARIABLE = "price"
 N_SAMPLES = None
 RANDOM_STATE = 42
 
@@ -59,10 +59,10 @@ def stratified_split(df, features, target, test_size=0.2, random_state=RANDOM_ST
 
 def get_train_test_data(include_img=True, include_count=True) -> tuple:
     """Loads the data and splits it into train and test sets."""
-    X_train = pd.read_csv(os.path.join("data", "X_train.csv"), index_col=0)
-    X_test = pd.read_csv(os.path.join("data", "X_test.csv"), index_col=0)
-    y_train = pd.read_csv(os.path.join("data", "y_train.csv"), index_col=0)
-    y_test = pd.read_csv(os.path.join("data", "y_test.csv"), index_col=0)
+    X_train = pd.read_csv(os.path.join("data", "X_train.csv"), index_col=0, low_memory=False)
+    X_test = pd.read_csv(os.path.join("data", "X_test.csv"), index_col=0, low_memory=False)
+    y_train = pd.read_csv(os.path.join("data", "y_train.csv"), index_col=0, low_memory=False)
+    y_test = pd.read_csv(os.path.join("data", "y_test.csv"), index_col=0, low_memory=False)
 
     assert X_train.index.name == "id", "X_train index name should be 'id'"
     assert X_test.index.name == "id", "X_test index name should be 'id'"
@@ -110,8 +110,8 @@ if __name__ == "__main__":
 
     X_train, X_test, y_train, y_test = stratified_split(
         df,
-        df.columns.drop(TARGET_COLUMN),
-        TARGET_COLUMN,
+        df.columns.drop(TARGET_VARIABLE),
+        TARGET_VARIABLE,
         test_size=0.2,
         random_state=RANDOM_STATE,
     )
