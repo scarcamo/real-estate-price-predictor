@@ -77,6 +77,7 @@ def get_feature_subsets(X_data):
         "base_poi_img": base_cols + poi_cols + img_cols,
         "base_pano_img": base_cols + pano_cols + img_cols,
         "base_poi_pano_img": base_cols + poi_cols + pano_cols + img_cols,
+        "poi_pano_img": poi_cols + pano_cols + img_cols,
     }
 
 
@@ -336,6 +337,19 @@ def make_features():
 
 
 if __name__ == "__main__":
+
+    run_feature_selection(
+        method="rfecv",
+        output_dir=OUTPUT_DIR,
+        feature_subset="base_img",
+    )
+
+    run_feature_selection(
+        method="rfecv",
+        output_dir=OUTPUT_DIR,
+        feature_subset="poi_pano_img",
+    )
+
     run_feature_selection(
         method="rfecv",
         output_dir=OUTPUT_DIR,
