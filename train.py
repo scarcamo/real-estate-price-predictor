@@ -5,6 +5,7 @@ import os
 import random
 import time
 import warnings
+from typing import Tuple
 
 import lightgbm as lgb
 
@@ -25,10 +26,9 @@ from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeRegressor
 
+from config import load_config
 from preprocessor import create_data_transformer_pipeline
 from split_data import get_train_test_data, get_train_test_img
-from config import load_config
-
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -58,12 +58,12 @@ N_PCA_COMPONENTS = config.get("N_PCA_COMPONENTS")
 N_ESTIMATORS = config.get("N_ESTIMATORS")
 RFE_STEP_SIZE = config.get("RFE_STEP_SIZE")
 
-optuna_dir = config.get('optuna_dir')
+optuna_dir = config.get("optuna_dir")
 db_file = "tuning.db"
 STUDY_DB_PATH = f"sqlite:///{os.path.join(optuna_dir, db_file)}"
-ARTIFACT_PATH = config.get('ARTIFACT_PATH') 
-SELECTED_FEATURES_FOLDER =  config.get('SELECTED_FEATURES_DIR') 
-SELECTED_FEATURES_NAME = f"rfecv_36{'_pca' if APPLY_PCA_IMG_TRANSFORM else '_non_pca'}{'_scaled' if APPLY_SCALE_TRANSFORM else ''}"
+ARTIFACT_PATH = config.get("ARTIFACT_PATH")
+SELECTED_FEATURES_FOLDER = config.get("SELECTED_FEATURES_DIR")
+SELECTED_FEATURES_NAME = "rfecv_base_nfeat_80_pca_scaled_count.json"
 
 MLFLOW_EXPERIMENT_NAME = f"Flat price predictor - {TARGET_VARIABLE} - {SELECTED_FEATURES_NAME} {'_scale' if APPLY_SCALE_TRANSFORM else ''}"
 
@@ -131,7 +131,6 @@ def get_model_configs():
                 n_jobs=-1,
             ),
         },
-
         # "AdaBoost": {
         #     "model": AdaBoostRegressor(
         #         estimator=DecisionTreeRegressor(max_depth=5), random_state=RANDOM_STATE
@@ -152,7 +151,6 @@ def get_model_configs():
         # "DecisionTree": {
         #     "model": DecisionTreeRegressor(random_state=RANDOM_STATE),
         # },
-
     }
     return configs
 
@@ -212,7 +210,9 @@ def get_model_params(model_name, trial):
             f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
         )  # Original: 100, 1000, step=50
         params[f"{MODEL_PREFIX}min_child_weight"] = trial.suggest_int(
-            f"{MODEL_PREFIX}min_child_weight", 5, 50 # 5-25 was ok
+            f"{MODEL_PREFIX}min_child_weight",
+            5,
+            50,  # 5-25 was ok
         )
         params[f"{MODEL_PREFIX}subsample"] = trial.suggest_float(
             f"{MODEL_PREFIX}subsample", 0.6, 1.0
@@ -223,7 +223,7 @@ def get_model_params(model_name, trial):
         params[f"{MODEL_PREFIX}gamma"] = trial.suggest_float(
             f"{MODEL_PREFIX}gamma",
             0,
-            5.0, 
+            5.0,
         )
         params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
             f"{MODEL_PREFIX}reg_lambda", 1e-2, 50.0, log=True
@@ -289,7 +289,7 @@ def get_model_params(model_name, trial):
         )
         params[f"{MODEL_PREFIX}l1_ratio"] = trial.suggest_float(
             f"{MODEL_PREFIX}l1_ratio", 0.05, 0.95
-        ) # l1_ratio = 0 is Ridge, l1_ratio = 1 is Lasso
+        )  # l1_ratio = 0 is Ridge, l1_ratio = 1 is Lasso
 
     return params
 
@@ -311,6 +311,7 @@ def train_evaluate_log(
     selected_feature_names,
     cv_strategy,
     parent_run_id=None,
+    feature_selection_metadata=None, 
 ):
     logging.info(f"Tuning {model_name} with Optuna")
     start_time = time.time()
@@ -424,7 +425,9 @@ def train_evaluate_log(
                 fold_scores.append(score)
 
             except optuna.TrialPruned:
-                logging.warning(f"Trial pruned for fold {fold_idx}. With score {score:.4f}")
+                logging.warning(
+                    f"Trial pruned for fold {fold_idx}. With score {score:.4f}"
+                )
                 return float("inf") if OPTUNA_DIRECTION == "minimize" else float("-inf")
             except Exception as e:
                 logging.error(f"Trial fold failed: {e}", exc_info=True)
@@ -444,11 +447,11 @@ def train_evaluate_log(
 
     mlflow_callback = MLflowCallback(
         tracking_uri=mlflow.get_tracking_uri(),
-        create_experiment=True, # TODO: check if is better with False
+        create_experiment=True,  # TODO: check if is better with False
         metric_name=MLFLOW_CALLBACK_METRIC_NAME,
         tag_study_user_attrs=True,
         tag_trial_user_attrs=True,
-        mlflow_kwargs={"nested": True}, # , "tags": {}
+        mlflow_kwargs={"nested": True},  # , "tags": {}
     )
 
     study = optuna.create_study(
@@ -458,6 +461,17 @@ def train_evaluate_log(
         load_if_exists=True,
         pruner=optuna.pruners.MedianPruner(),
     )
+
+
+    study.set_user_attr("feature_set_name", SELECTED_FEATURES_NAME)
+
+    if feature_selection_metadata:
+        for key, value in feature_selection_metadata.items():
+            if key in ('rfe_step_size', 'n_estimators', 'method'):
+                mlflow.log_param(f"fs_{key}", value)
+            else:
+                mlflow.log_param(f"{key}", value)
+
 
     print(f"Starting Optuna optimization with {N_TRIALS_OPTUNA} trials...")
     optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -563,23 +577,24 @@ def train_evaluate_log(
         mlflow.set_tag("run_type", "best_run")
 
         mlflow.log_param("model_name", model_name)
-        mlflow.log_param("feature_set", SELECTED_FEATURES_NAME)        
+        mlflow.log_param("feature_set", SELECTED_FEATURES_NAME)
         mlflow.log_param("num_selected_features", len(final_valid_selected_names))
-        mlflow.log_params(
-            {k: v for k, v in best_params_optuna.items()}
-        )
+        mlflow.log_params({k: v for k, v in best_params_optuna.items()})
 
         mlflow.log_param("cv_folds", CV_FOLDS)
         mlflow.log_param("random_state", RANDOM_STATE)
         mlflow.log_param("n_trials_optuna", N_TRIALS_OPTUNA)
         mlflow.log_param("tuning_scoring_metric", TUNING_SCORING_METRIC)
         mlflow.log_param("optuna_direction", OPTUNA_DIRECTION)
-        mlflow.log_param("apply_scale_transform", APPLY_SCALE_TRANSFORM)
-        mlflow.log_param("apply_pca_img_transform", APPLY_PCA_IMG_TRANSFORM)
-        mlflow.log_param("n_pca_components", N_PCA_COMPONENTS)
-        mlflow.log_param("fs_rfe_step_size", RFE_STEP_SIZE)
-        mlflow.log_param("fs_n_estimators", N_ESTIMATORS)
         
+        if feature_selection_metadata:
+            for key, value in feature_selection_metadata.items():
+                if key in ('rfe_step_size', 'n_estimators', 'method'):
+                    mlflow.log_param(f"fs_{key}", value)
+                else:
+                    mlflow.log_param(f"{key}", value)
+
+        mlflow.log_param("n_pca_components", N_PCA_COMPONENTS)
 
         mlflow.log_metric(MLFLOW_CALLBACK_METRIC_NAME, best_score_optuna)
         mlflow.log_metric(f"best_optuna_cv_{TUNING_SCORING_METRIC}", best_score_optuna)
@@ -619,6 +634,27 @@ def train_evaluate_log(
         os.remove(feature_list_path)
 
     return final_run_id_logged, study
+
+
+def get_selected_features(selected_features_path) -> Tuple[list, dict]:
+    print(f"\nLoading selected feature names from {selected_features_path}...")
+    feature_selection_metadata = {}
+    try:
+        with open(
+            os.path.join(SELECTED_FEATURES_FOLDER, selected_features_path), "r"
+        ) as f:
+            feature_data = json.load(f)
+            selected_features_names = feature_data.get("selected_features", [])
+            feature_selection_metadata = feature_data.get("metadata", {})
+            print(f"Loaded feature selection: {feature_selection_metadata}")
+    except FileNotFoundError:
+        print(
+            f"Feature selection file not found at {selected_features_path}. Skipping metadata logging."
+        )
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Error loading or validating feature selection metadata: {e}")
+
+    return selected_features_names, feature_selection_metadata
 
 
 # %% Main Execution Block
@@ -661,25 +697,9 @@ if __name__ == "__main__":
     print(f"Original Categorical Cols: {len(original_categorical_cols)}")
     print(f"Original Image Cols: {len(original_img_cols)}")
 
-    print(f"\nLoading selected feature names from {SELECTED_FEATURES_PATH}...")
-    try:
-        with open(os.path.join(SELECTED_FEATURES_FOLDER, SELECTED_FEATURES_PATH), "r") as f:
-            selected_features_names = json.load(f)
-        if not (
-            isinstance(selected_features_names, list)
-            and all(isinstance(f, str) for f in selected_features_names)
-        ):
-            raise ValueError(
-                "Selected features file should contain a JSON list of strings (feature names)."
-            )
-        print(f"Loaded {len(selected_features_names)} selected feature names.")
-
-    except FileNotFoundError:
-        print(f"Error: Selected features file not found at {SELECTED_FEATURES_PATH}.")
-        exit()
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"Error loading or validating selected features: {e}")
-        exit()
+    selected_features_names, selected_features_metadata = get_selected_features(
+        SELECTED_FEATURES_PATH
+    )
 
     Y_train_log_transformed = np.log(Y_train_raw[TARGET_VARIABLE])
 
@@ -693,10 +713,7 @@ if __name__ == "__main__":
         print(f"Main Run ID: {main_run.info.run_id}")
         mlflow.log_param("random_state", RANDOM_STATE)
         mlflow.log_param("cv_folds", CV_FOLDS)
-        mlflow.log_param(
-            "apply_scale_transform", APPLY_SCALE_TRANSFORM
-        )
-
+        mlflow.log_param("apply_scale_transform", APPLY_SCALE_TRANSFORM)
 
         mlflow.log_param("n_trials_optuna", N_TRIALS_OPTUNA)
 
@@ -735,6 +752,7 @@ if __name__ == "__main__":
                     selected_feature_names=selected_features_names,
                     cv_strategy=cv_strategy,
                     parent_run_id=main_run.info.run_id,
+                    feature_selection_metadata=selected_features_metadata,
                 )
             except Exception as e:
                 logging.error(f"* ERROR training {model_name}: {e} !!!!", exc_info=True)
