@@ -1,7 +1,11 @@
+import os
+
 import yaml
 
+path = os.path.join(os.path.dirname(__file__), "config", "config.yaml")
 
-def load_config(file_path="config/config.yaml"):
+
+def load_config(file_path=path):
     """Loads YAML configuration from the given file path."""
     try:
         with open(file_path, "r") as stream:
