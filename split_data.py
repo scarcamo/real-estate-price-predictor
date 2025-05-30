@@ -59,10 +59,10 @@ def stratified_split(df, features, target, test_size=0.2, random_state=RANDOM_ST
 
 def get_train_test_data(include_img=True, include_count=True) -> tuple:
     """Loads the data and splits it into train and test sets."""
-    X_train = pd.read_csv(os.path.join("data", "X_train.csv"), index_col=0, low_memory=False)
-    X_test = pd.read_csv(os.path.join("data", "X_test.csv"), index_col=0, low_memory=False)
-    y_train = pd.read_csv(os.path.join("data", "y_train.csv"), index_col=0, low_memory=False)
-    y_test = pd.read_csv(os.path.join("data", "y_test.csv"), index_col=0, low_memory=False)
+    X_train = pd.read_csv(os.path.join(os.path.dirname(__file__), "data", "X_train.csv"), index_col=0, low_memory=False)
+    X_test = pd.read_csv(os.path.join(os.path.dirname(__file__), "data", "X_test.csv"), index_col=0, low_memory=False)
+    y_train = pd.read_csv(os.path.join(os.path.dirname(__file__), "data", "y_train.csv"), index_col=0, low_memory=False)
+    y_test = pd.read_csv(os.path.join(os.path.dirname(__file__), "data", "y_test.csv"), index_col=0, low_memory=False)
 
     assert X_train.index.name == "id", "X_train index name should be 'id'"
     assert X_test.index.name == "id", "X_test index name should be 'id'"
@@ -86,8 +86,8 @@ def get_train_test_data(include_img=True, include_count=True) -> tuple:
 
 def get_train_test_img() -> tuple:
     """Loads the data and splits it into train and test sets."""
-    img_train = pd.read_csv(os.path.join("data", "img_train.csv"), index_col=0)
-    img_test = pd.read_csv(os.path.join("data", "img_test.csv"), index_col=0)
+    img_train = pd.read_csv(os.path.join(os.path.dirname(__file__),"data", "img_train.csv"), index_col=0)
+    img_test = pd.read_csv(os.path.join(os.path.dirname(__file__),"data", "img_test.csv"), index_col=0)
 
     assert img_train.index.name == "id", "img_train index name should be 'id'"
     assert img_test.index.name == "id", "img_test index name should be 'id'"
@@ -100,7 +100,7 @@ if __name__ == "__main__":
         os.path.join("data", "real_estate_thesis_processed.csv"), index_col=0
     )
 
-    img_data = pd.read_csv(os.path.join("data", "img_interior_max.csv"))
+    img_data = pd.read_csv(os.path.join(os.path.dirname(__file__),"data", "img_interior_max.csv"))
     img_data.set_index("id", inplace=True)
 
     df = df.merge(img_data, left_index=True, right_index=True, how="left")
@@ -116,10 +116,10 @@ if __name__ == "__main__":
         random_state=RANDOM_STATE,
     )
 
-    X_train.to_csv(os.path.join("data", "X_train.csv"), index=True)
-    X_test.to_csv(os.path.join("data", "X_test.csv"), index=True)
-    y_train.to_csv(os.path.join("data", "y_train.csv"), index=True)
-    y_test.to_csv(os.path.join("data", "y_test.csv"), index=True)
+    X_train.to_csv(os.path.join(os.path.dirname(__file__),"data", "X_train.csv"), index=True)
+    X_test.to_csv(os.path.join(os.path.dirname(__file__),"data", "X_test.csv"), index=True)
+    y_train.to_csv(os.path.join(os.path.dirname(__file__),"data", "y_train.csv"), index=True)
+    y_test.to_csv(os.path.join(os.path.dirname(__file__),"data", "y_test.csv"), index=True)
 
     if X_train.index.name != "id" or X_test.index.name != "id":
         raise ValueError("X_train and X_test index name should be 'id'")
@@ -130,5 +130,5 @@ if __name__ == "__main__":
     img_train = img_data[img_data.index.isin(train_ids)]
     img_test = img_data[img_data.index.isin(test_ids)]
 
-    img_train.to_csv(os.path.join("data", "img_train.csv"), index=True)
-    img_test.to_csv(os.path.join("data", "img_test.csv"), index=True)
+    img_train.to_csv(os.path.join(os.path.dirname(__file__),"data", "img_train.csv"), index=True)
+    img_test.to_csv(os.path.join(os.path.dirname(__file__),"data", "img_test.csv"), index=True)
