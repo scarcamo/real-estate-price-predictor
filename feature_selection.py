@@ -25,6 +25,7 @@ VERBOSE = 1
 N_FEATURES = config.get("N_FEATURES", 100)
 RFE_STEP_SIZE = config.get("RFE_STEP_SIZE")
 INCLUDE_COUNT = config.get("INCLUDE_COUNT", True)
+N_PCA_COMPONENTS = config.get("N_PCA_COMPONENTS", 10)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -180,6 +181,7 @@ def run_feature_selection(
         outlier_indicator_col=outlier_col_name,
         apply_scaling_and_transform=APPLY_SCALE_TRANSFORM,
         apply_pca=APPLY_PCA_IMG_TRANSFORM,
+        n_pca_components=N_PCA_COMPONENTS,
     )
 
     print("Fitting data transformer on X_train for feature selection...")
@@ -297,6 +299,7 @@ def run_feature_selection(
         "feature_subset_used": feature_subset,
         "n_features_selected": len(final_selected_feature_names),
         "apply_pca_img_transform": APPLY_PCA_IMG_TRANSFORM,
+        "n_pca_components": N_PCA_COMPONENTS,
         "apply_scale_transform": APPLY_SCALE_TRANSFORM,
         "include_count": INCLUDE_COUNT,
         "n_estimators": N_ESTIMATORS,
@@ -344,11 +347,6 @@ if __name__ == "__main__":
         feature_subset="base_img",
     )
 
-    run_feature_selection(
-        method="rfecv",
-        output_dir=OUTPUT_DIR,
-        feature_subset="poi_pano_img",
-    )
 
     run_feature_selection(
         method="rfecv",
