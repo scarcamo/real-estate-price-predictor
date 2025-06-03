@@ -164,7 +164,7 @@ def get_model_params(model_name, trial):
             f"{MODEL_PREFIX}n_estimators", 100, 1000, step=50
         )
         params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
-            f"{MODEL_PREFIX}max_depth", 5, 20
+            f"{MODEL_PREFIX}max_depth", 5, 15
         )
         params[f"{MODEL_PREFIX}min_samples_split"] = trial.suggest_int(
             f"{MODEL_PREFIX}min_samples_split", 5, 50
@@ -183,7 +183,7 @@ def get_model_params(model_name, trial):
         params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
             f"{MODEL_PREFIX}max_depth",
             3,
-            8,
+            12,
         )
         params[f"{MODEL_PREFIX}learning_rate"] = trial.suggest_float(
             f"{MODEL_PREFIX}learning_rate", 0.01, 0.3, log=True
@@ -208,10 +208,10 @@ def get_model_params(model_name, trial):
             5.0,
         )
         params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
-            f"{MODEL_PREFIX}reg_lambda", 1e-2, 50.0, log=True
+            f"{MODEL_PREFIX}reg_lambda", 1e-2, 200.0, log=True
         )
         params[f"{MODEL_PREFIX}reg_alpha"] = trial.suggest_float(
-            f"{MODEL_PREFIX}reg_alpha", 1e-2, 50.0, log=True
+            f"{MODEL_PREFIX}reg_alpha", 1e-2, 200.0, log=True
         )
 
     elif model_name == "LightGBM":
@@ -225,10 +225,10 @@ def get_model_params(model_name, trial):
             f"{MODEL_PREFIX}num_leaves", 20, 100
         )
         params[f"{MODEL_PREFIX}max_depth"] = trial.suggest_int(
-            f"{MODEL_PREFIX}max_depth", 5, 30
+            f"{MODEL_PREFIX}max_depth", 5, 15
         )
         params[f"{MODEL_PREFIX}min_child_samples"] = trial.suggest_int(
-            f"{MODEL_PREFIX}min_child_samples", 5, 51
+            f"{MODEL_PREFIX}min_child_samples", 20, 100
         )
         params[f"{MODEL_PREFIX}subsample"] = trial.suggest_float(
             f"{MODEL_PREFIX}subsample", 0.6, 1.0
@@ -237,10 +237,10 @@ def get_model_params(model_name, trial):
             f"{MODEL_PREFIX}colsample_bytree", 0.5, 1.0
         )
         params[f"{MODEL_PREFIX}reg_alpha"] = trial.suggest_float(
-            f"{MODEL_PREFIX}reg_alpha", 1e-2, 50.0, log=True
+            f"{MODEL_PREFIX}reg_alpha", 1e-2, 200.0, log=True
         )
         params[f"{MODEL_PREFIX}reg_lambda"] = trial.suggest_float(
-            f"{MODEL_PREFIX}reg_lambda", 1e-2, 50.0, log=True
+            f"{MODEL_PREFIX}reg_lambda", 1e-2, 200.0, log=True
         )
 
     elif model_name == "AdaBoost":
@@ -429,7 +429,16 @@ def train_evaluate_log(
         pruner=optuna.pruners.MedianPruner(),
     )
 
+    study.set_user_attr("run_type", "optuna_run") 
+    study.set_user_attr("model_name", model_name) 
     study.set_user_attr("feature_set_name", SELECTED_FEATURES_FILENAME) 
+
+    study.set_user_attr("cv_folds", CV_FOLDS) 
+    study.set_user_attr("random_state", SELECTED_FEATURES_FILENAME) 
+    study.set_user_attr("n_trials_optuna", N_TRIALS_OPTUNA) 
+    study.set_user_attr("tuning_scoring_metric", TUNING_SCORING_METRIC) 
+    study.set_user_attr("tuning_scoring_metric", OPTUNA_DIRECTION) 
+    
 
     if feature_selection_metadata:
         for key, value in feature_selection_metadata.items():
