@@ -96,6 +96,10 @@ def load_config(file_path=None, experiment_config_path=None):
 
 
     optuna_dir = merged_config.get("optuna_dir", "optuna_studies")
+
+    if not os.path.exists(optuna_dir):
+        os.makedirs(optuna_dir, exist_ok=True)
+
     db_file = merged_config.get("optuna", {}).get("db_file", "tuning.db")
 
     optuna_dir_path = merged_config.get("optuna_dir", "optuna_studies") 
