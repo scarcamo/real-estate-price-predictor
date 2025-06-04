@@ -180,3 +180,4 @@ data
 .DS_Store
 selected_features/*
 selected_features_old/*
+cache
