@@ -585,18 +585,24 @@ def train_evaluate_log(
                     model_step_in_pipeline,
                     f"{model_name}_model",
                     input_example=input_example_data,
+                    pip_requirements=None,  # Disable automatic pip requirement detection
+                    extra_pip_requirements=None,
                 )
             elif isinstance(model_step_in_pipeline, lgb.LGBMModel):
                 mlflow.lightgbm.log_model(
                     model_step_in_pipeline,
                     f"{model_name}_model",
                     input_example=input_example_data,
+                    pip_requirements=None,  # Disable automatic pip requirement detection
+                    extra_pip_requirements=None,
                 )
             else:
                 mlflow.sklearn.log_model(
                     best_model_pipeline, 
                     f"{model_name}_pipeline",
                     input_example=input_example_data,
+                    pip_requirements=None,  # Disable automatic pip requirement detection
+                    extra_pip_requirements=None,
                 )
         except Exception as e:
             logging.error(f"Error logging model {model_name}: {e}")

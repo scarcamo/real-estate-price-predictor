@@ -59,10 +59,11 @@ def stratified_split(df, features, target, test_size=0.2, random_state=RANDOM_ST
 
 def get_train_test_data(include_img=True, include_count=True) -> tuple:
     """Loads the data and splits it into train and test sets."""
-    X_train = pd.read_csv(os.path.join(os.path.dirname(__file__), "data", "X_train.csv"), index_col=0, low_memory=False)
-    X_test = pd.read_csv(os.path.join(os.path.dirname(__file__), "data", "X_test.csv"), index_col=0, low_memory=False)
-    y_train = pd.read_csv(os.path.join(os.path.dirname(__file__), "data", "y_train.csv"), index_col=0, low_memory=False)
-    y_test = pd.read_csv(os.path.join(os.path.dirname(__file__), "data", "y_test.csv"), index_col=0, low_memory=False)
+    base_path = os.path.join(os.path.dirname(__file__), "..", "data")
+    X_train = pd.read_csv(os.path.join(base_path, "X_train.csv"), index_col=0, low_memory=False)
+    X_test = pd.read_csv(os.path.join(base_path, "X_test.csv"), index_col=0, low_memory=False)
+    y_train = pd.read_csv(os.path.join(base_path, "y_train.csv"), index_col=0, low_memory=False)
+    y_test = pd.read_csv(os.path.join(base_path, "y_test.csv"), index_col=0, low_memory=False)
 
     assert X_train.index.name == "id", "X_train index name should be 'id'"
     assert X_test.index.name == "id", "X_test index name should be 'id'"
@@ -86,8 +87,9 @@ def get_train_test_data(include_img=True, include_count=True) -> tuple:
 
 def get_train_test_img() -> tuple:
     """Loads the data and splits it into train and test sets."""
-    img_train = pd.read_csv(os.path.join(os.path.dirname(__file__),"data", "img_train.csv"), index_col=0)
-    img_test = pd.read_csv(os.path.join(os.path.dirname(__file__),"data", "img_test.csv"), index_col=0)
+    base_path = os.path.join(os.path.dirname(__file__), "..", "data")
+    img_train = pd.read_csv(os.path.join(base_path, "img_train.csv"), index_col=0)
+    img_test = pd.read_csv(os.path.join(base_path, "img_test.csv"), index_col=0)
 
     assert img_train.index.name == "id", "img_train index name should be 'id'"
     assert img_test.index.name == "id", "img_test index name should be 'id'"

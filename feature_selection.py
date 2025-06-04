@@ -8,9 +8,9 @@ from sklearn.feature_selection import RFE, RFECV, SelectFromModel
 from sklearn.inspection import permutation_importance
 from sklearn.model_selection import KFold
 
-from config import load_config
-from preprocessor import create_data_transformer_pipeline
-from split_data import get_train_test_data, get_train_test_img
+from src.config import load_config
+from src.preprocessor import create_data_transformer_pipeline
+from src.split_data import get_train_test_data, get_train_test_img
 
 config = load_config()
 
@@ -341,24 +341,24 @@ def make_features():
 
 if __name__ == "__main__":
 
-    run_feature_selection(
-        method="rfecv",
-        output_dir=OUTPUT_DIR,
-        feature_subset="base_img",
-    )
+    # run_feature_selection(
+    #     method="rfecv",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="base_img",
+    # )
 
 
-    run_feature_selection(
-        method="rfecv",
-        output_dir=OUTPUT_DIR,
-        feature_subset="base",
-    )
+    # run_feature_selection(
+    #     method="rfecv",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="base",
+    # )
 
-    run_feature_selection(
-        method="rfecv",
-        output_dir=OUTPUT_DIR,
-        feature_subset="base_pano",
-    )
+    # run_feature_selection(
+    #     method="rfecv",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="base_pano",
+    # )
 
     run_feature_selection(
         method="rfecv",
@@ -366,14 +366,14 @@ if __name__ == "__main__":
         feature_subset="all",
     )
 
-    run_feature_selection(
-        method="rfecv",
-        output_dir=OUTPUT_DIR,
-        feature_subset="base_poi",
-    )
+    # run_feature_selection(
+    #     method="rfecv",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="base_poi",
+    # )
 
-    run_feature_selection(
-        method="rfecv",
-        output_dir=OUTPUT_DIR,
-        feature_subset="base_poi_pano",
-    )
+    # run_feature_selection(
+    #     method="rfecv",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="base_poi_pano",
+    # )
