@@ -1,0 +1,40 @@
+{
+    "selected_features": [
+        "latitude",
+        "longitude",
+        "area_m2",
+        "building_floors_num",
+        "has_dishwasher",
+        "building_age",
+        "distance_to_center_km",
+        "room_size_m2",
+        "floor_ratio",
+        "district_srodmiescie",
+        "district_wilanow",
+        "building_type_apartment",
+        "building_type_block",
+        "construction_status_ready_to_use",
+        "pca0",
+        "pca1",
+        "pca2",
+        "pca4",
+        "pca5",
+        "pca6",
+        "pca7",
+        "pca8",
+        "pca11",
+        "pca17"
+    ],
+    "metadata": {
+        "method": "rfecv",
+        "feature_subset_used": "base_img",
+        "n_features_selected": 24,
+        "apply_pca_img_transform": true,
+        "apply_scale_transform": true,
+        "include_count": true,
+        "n_estimators": 100,
+        "random_state": 42,
+        "rfe_step_size": 0.1,
+        "n_pca_components": 0.8
+    }
+}
