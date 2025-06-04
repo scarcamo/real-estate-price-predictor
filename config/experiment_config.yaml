@@ -1,0 +1,28 @@
+feature_sets:
+  - "rfecv_all_nfeat_81_nonpca_count.json"
+  - "rfecv_all_nfeat_44_pca_scaled_count.json"
+  - "rfecv_base_nfeat_80_pca_scaled_count.json"
+  - "rfecv_base_poi_pano_nfeat_182_pca_scaled_count.json"
+
+models_to_run:
+  - "LightGBM"
+
+feature_sets_dir: "feature_sets"
+optuna_dir: "optuna_studies"
+artifact_path: "models_and_artifacts"
+
+target_variable: "price"
+
+cv_folds: 5
+
+# Optuna hyperparameter tuning settings
+optuna:
+  n_trials: 200
+  scoring_metric: "mape"  # Options: "mape", "rmse"
+  direction: "minimize"
+  db_file: "tuning_.db"
+
+# MLflow settings
+mlflow:
+  tracking_uri: "./mlruns"
+  experiment_name_prefix: "RE price predictor" 
