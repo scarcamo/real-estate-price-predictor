@@ -50,12 +50,19 @@ def merge_configs(config1: Dict[str, Any], config2: Dict[str, Any]) -> Dict[str,
     if "feature_sets" not in merged:
         merged["feature_sets"] = ["rfecv_all_nfeat_44_pca_scaled_count.json"]
     
+    # Ensure scoring_metric is a list if not already
+    if "optuna" in merged and "scoring_metric" in merged["optuna"]:
+        if isinstance(merged["optuna"]["scoring_metric"], str):
+            merged["optuna"]["scoring_metric"] = [merged["optuna"]["scoring_metric"]]
+    elif "optuna" in merged:
+        merged["optuna"]["scoring_metric"] = ["mape"]
+    
     return merged
 
-def setup_experiment(config: Dict[str, Any], feature_set: str) -> None:
+def setup_experiment(config: Dict[str, Any], feature_set: str, scoring_metric: str) -> None:
     """Setup MLflow experiment"""
     feature_set_identifier = feature_set.replace(".json", "")
-    experiment_name = f"RE {config['target_variable']} predictor - {feature_set_identifier}"
+    experiment_name = f"RE {config['target_variable']} predictor - {feature_set_identifier} - {scoring_metric}"
     logging.info(f"Using MLflow Experiment: '{experiment_name}'")
     mlflow.set_experiment(experiment_name)
 
@@ -105,65 +112,71 @@ def update_config_from_metadata(config: Dict[str, Any], metadata: Dict[str, Any]
         np.random.seed(config["RANDOM_STATE"])
         random.seed(config["RANDOM_STATE"])
 
-def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str) -> None:
-    """Run experiment for a single feature set"""
-    logging.info(f"\n=== Starting experiment for feature set: {feature_set} ===")
+def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str, scoring_metric: str) -> None:
+    """Run experiment for a single feature set with a specific scoring metric"""
+    logging.info(f"\n=== Starting experiment for feature set: {feature_set} with scoring metric: {scoring_metric} ===")
     
     # Get feature set name without .json extension for trainer
     feature_set_name = feature_set.replace(".json", "")
     
+    # Create a copy of config with the specific scoring metric
+    experiment_config = config.copy()
+    experiment_config["optuna"] = config["optuna"].copy()
+    experiment_config["optuna"]["scoring_metric"] = scoring_metric
+    
     try:
         # Load and validate features
-        selected_features_names, selected_features_metadata = load_and_validate_features(config, feature_set)
+        selected_features_names, selected_features_metadata = load_and_validate_features(experiment_config, feature_set)
         
         # Update configuration from metadata
-        update_config_from_metadata(config, selected_features_metadata)
+        update_config_from_metadata(experiment_config, selected_features_metadata)
         
         # Setup MLflow experiment
-        setup_experiment(config, feature_set)
+        setup_experiment(experiment_config, feature_set, scoring_metric)
         
         # Initialize data manager and load data
-        data_manager = DataManager(config)
+        data_manager = DataManager(experiment_config)
         data_manager.load_data()
         
         # Setup cross-validation
         cv_strategy = KFold(
-            n_splits=config["cv_folds"],
+            n_splits=experiment_config["cv_folds"],
             shuffle=True,
-            random_state=config["RANDOM_STATE"]
+            random_state=experiment_config["RANDOM_STATE"]
         )
         
         # Get model configurations for selected models
-        all_model_configs = get_model_configs(config["RANDOM_STATE"])
+        all_model_configs = get_model_configs(experiment_config["RANDOM_STATE"], metric=scoring_metric)
         model_configs = {
             name: cfg for name, cfg in all_model_configs.items()
-            if name in config["models_to_run"]
+            if name in experiment_config["models_to_run"]
         }
         
         if not model_configs:
-            logging.warning(f"No valid models found in config['models_to_run']: {config['models_to_run']}")
+            logging.warning(f"No valid models found in config['models_to_run']: {experiment_config['models_to_run']}")
             return
         
         # Initialize trainer with feature set name
-        trainer = ModelTrainer(config, data_manager, feature_set_name)
+        trainer = ModelTrainer(experiment_config, data_manager, feature_set_name)
         
         # Main experiment run
         with mlflow.start_run(
-            run_name=f"MainRun_{feature_set_name}"
+            run_name=f"MainRun_{feature_set_name}_{scoring_metric}"
         ) as main_run:
-            logging.info(f"Main Run ID for {feature_set}: {main_run.info.run_id}")
+            logging.info(f"Main Run ID for {feature_set} with {scoring_metric}: {main_run.info.run_id}")
             mlflow.set_tag("feature_set_file", feature_set)
+            mlflow.set_tag("scoring_metric", scoring_metric)
             
             # Log configuration parameters
             config_params = {
-                "random_state": config["RANDOM_STATE"],
-                "cv_folds": config["cv_folds"],
-                "apply_scale_transform": config["APPLY_SCALE_TRANSFORM"],
-                "apply_pca_img_transform": config["APPLY_PCA_IMG_TRANSFORM"],
-                "n_pca_components": config["n_pca_components"],
-                "n_trials_optuna": config["optuna"]["n_trials"],
-                "tuning_scoring_metric": config["optuna"]["scoring_metric"],
-                "optuna_direction": config["optuna"]["direction"]
+                "random_state": experiment_config["RANDOM_STATE"],
+                "cv_folds": experiment_config["cv_folds"],
+                "apply_scale_transform": experiment_config["APPLY_SCALE_TRANSFORM"],
+                "apply_pca_img_transform": experiment_config["APPLY_PCA_IMG_TRANSFORM"],
+                "n_pca_components": experiment_config["n_pca_components"],
+                "n_trials_optuna": experiment_config["optuna"]["n_trials"],
+                "tuning_scoring_metric": experiment_config["optuna"]["scoring_metric"],
+                "optuna_direction": experiment_config["optuna"]["direction"]
             }
             mlflow.log_params(config_params)
             
@@ -192,13 +205,13 @@ def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str) -> 
                     )
                 except Exception as e:
                     logging.error(
-                        f"* FATAL ERROR training {model_name} for feature set {feature_set}: {e} !!!!",
+                        f"* FATAL ERROR training {model_name} for feature set {feature_set} with {scoring_metric}: {e} !!!!",
                         exc_info=True
                     )
                     mlflow.log_param(f"ERROR_{model_name}", str(e))
                     continue
     except Exception as e:
-        logging.error(f"Error in experiment for feature set {feature_set}: {e}", exc_info=True)
+        logging.error(f"Error in experiment for feature set {feature_set} with {scoring_metric}: {e}", exc_info=True)
         raise
 
 def main():
@@ -211,13 +224,19 @@ def main():
         logging.error(f"Error loading configuration: {e}", exc_info=True)
         raise
     
-    # Run experiments for each feature set
+    # Ensure scoring_metrics is always a list
+    scoring_metrics = config["optuna"]["scoring_metric"]
+    if isinstance(scoring_metrics, str):
+        scoring_metrics = [scoring_metrics]
+    
+    # Run experiments for each combination of feature set and scoring metric
     for feature_set in config["feature_sets"]:
-        try:
-            run_experiment_for_feature_set(config, feature_set)
-        except Exception as e:
-            logging.error(f"Failed to run experiment for feature set {feature_set}: {e}", exc_info=True)
-            continue
+        for scoring_metric in scoring_metrics:
+            try:
+                run_experiment_for_feature_set(config, feature_set, scoring_metric)
+            except Exception as e:
+                logging.error(f"Failed to run experiment for feature set {feature_set} with scoring metric {scoring_metric}: {e}", exc_info=True)
+                continue
     
     logging.info("\n--- All Experiments Finished ---")
 

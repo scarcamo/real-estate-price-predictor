@@ -102,7 +102,7 @@ if __name__ == "__main__":
         os.path.join("data", "real_estate_thesis_processed.csv"), index_col=0
     )
 
-    img_data = pd.read_csv(os.path.join(os.path.dirname(__file__),"data", "img_interior_max.csv"))
+    img_data = pd.read_csv(os.path.join(os.path.dirname(__file__), '..', "data", "img_interior_max.csv"))
     img_data.set_index("id", inplace=True)
 
     df = df.merge(img_data, left_index=True, right_index=True, how="left")
@@ -118,10 +118,11 @@ if __name__ == "__main__":
         random_state=RANDOM_STATE,
     )
 
-    X_train.to_csv(os.path.join(os.path.dirname(__file__),"data", "X_train.csv"), index=True)
-    X_test.to_csv(os.path.join(os.path.dirname(__file__),"data", "X_test.csv"), index=True)
-    y_train.to_csv(os.path.join(os.path.dirname(__file__),"data", "y_train.csv"), index=True)
-    y_test.to_csv(os.path.join(os.path.dirname(__file__),"data", "y_test.csv"), index=True)
+    base_path = os.path.join(os.path.dirname(__file__), '..', "data")
+    X_train.to_csv(os.path.join(base_path, "X_train.csv"), index=True)
+    X_test.to_csv(os.path.join(base_path, "X_test.csv"), index=True)
+    y_train.to_csv(os.path.join(base_path, "y_train.csv"), index=True)
+    y_test.to_csv(os.path.join(base_path, "y_test.csv"), index=True)
 
     if X_train.index.name != "id" or X_test.index.name != "id":
         raise ValueError("X_train and X_test index name should be 'id'")
@@ -132,5 +133,5 @@ if __name__ == "__main__":
     img_train = img_data[img_data.index.isin(train_ids)]
     img_test = img_data[img_data.index.isin(test_ids)]
 
-    img_train.to_csv(os.path.join(os.path.dirname(__file__),"data", "img_train.csv"), index=True)
-    img_test.to_csv(os.path.join(os.path.dirname(__file__),"data", "img_test.csv"), index=True)
+    img_train.to_csv(os.path.join(base_path, "img_train.csv"), index=True)
+    img_test.to_csv(os.path.join(base_path, "img_test.csv"), index=True)

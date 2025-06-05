@@ -218,7 +218,8 @@ class ModelTrainer:
 
     def _setup_optuna_study(self, model_name: str) -> optuna.Study:
         """Setup Optuna study"""
-        study_name = f"{model_name}_{self.feature_set_name}_study"
+        scoring_metric = self.config["optuna"]["scoring_metric"]
+        study_name = f"{model_name}_{self.feature_set_name}_{scoring_metric}_study"
         logging.info(f"Using Optuna study '{study_name}' with storage '{self.config['optuna']['study_db_path']}'")
 
         study = optuna.create_study(
@@ -232,6 +233,7 @@ class ModelTrainer:
         study.set_user_attr("run_type", "optuna_run")
         study.set_user_attr("model_name", model_name)
         study.set_user_attr("feature_set_name", self.feature_set_name)
+        study.set_user_attr("scoring_metric", scoring_metric)
         study.set_user_attr("cv_folds", self.config["CV_FOLDS"])
         study.set_user_attr("random_state", self.config["RANDOM_STATE"])
         study.set_user_attr("n_trials_optuna", self.config["optuna"]["n_trials"])
@@ -323,7 +325,7 @@ class ModelTrainer:
             run_tags["mlflow.parentRunId"] = parent_run_id
 
         with mlflow.start_run(
-            run_name=f"{model_name}_{self.feature_set_name}_BEST",
+            run_name=f"{model_name}_{self.feature_set_name}_{self.config['optuna']['scoring_metric']}_BEST",
             tags=run_tags,
             nested=True,
         ) as run:
@@ -392,7 +394,7 @@ class ModelTrainer:
         model_step_in_pipeline = model_pipeline.named_steps["model"]
         try:
             if isinstance(model_step_in_pipeline, xgb.XGBModel):
-                mlflow.xgboost.s(
+                mlflow.xgboost.log_model(
                     model_step_in_pipeline,
                     f"{model_name}_model",
                     input_example=input_example_data,
