@@ -157,16 +157,22 @@ df["floor_ratio"] = df["floor_number"] / df["building_floors_num"]
 
 # select most common values for categorical variables
 top_heating = df["heating"].value_counts().index[:4]
+print("Top heating types:", top_heating)
 df["heating"] = df["heating"].apply(lambda x: x if x in top_heating else "OTHER")
 
 top_building_type = df["building_type"].value_counts().index[:3]
+excluded_building_types = [ bt for bt in df["building_type"].unique() if bt not in top_building_type ]
+print("Top building types:", top_building_type)
+print("Excluding", excluded_building_types)
 df["building_type"] = df["building_type"].apply(
     lambda x: x if x in top_building_type else "OTHER"
 )
 
 
 df["building_material"] = df["building_material"].replace("[]", "MISSING")
+
 top_building_material = df["building_material"].value_counts().index[:6]
+print("Top building materials:", top_building_material)
 df["building_material"] = df["building_material"].apply(
     lambda x: x if x in top_building_material else "OTHER"
 )
@@ -278,7 +284,7 @@ indices_to_drop = [
 
 
 df = df.drop(indices_to_drop, axis=0)
-df = df.drop(invalid_properties_indexes, axis=0)
+df = df.drop(invalid_properties_indexes, axis=0, errors='ignore')
 
 df.columns = [col.replace("—", "-") for col in df.columns]
 
