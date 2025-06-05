@@ -1,0 +1,17 @@
+{
+    "selected_features": ["latitude", "longitude", "area_m2", "floor_number", "building_floors_num", "has_dishwasher", "play_areas_1000_m2", "park_areas_3000_m2", "dist_restaurant", "dist_playground", "dist_post_office", "dist_bar", "dist_cinema", "dist_doctors", "dist_supermarket", "dist_bank", "dist_hotel", "dist_theatre", "dist_beauty", "dist_library", "dist_hospital", "dist_cafe", "dist_dentist", "dist_fitness_centre", "dist_museum", "dist_university", "dist_police", "dist_hairdresser", "dist_electronics", "dist_clinic", "dist_fire_station", "dist_mobile_phone", "dist_butcher", "dist_computer", "dist_fuel", "dist_swimming_pool", "dist_department_store", "dist_sauna", "dist_mall", "dist_college", "dist_park", "dist_stadium", "dist_nature_reserve", "dist_bus", "dist_train", "dist_ferry", "dist_subway", "dist_tram", "dist_highway_tertiary", "dist_highway_primary", "dist_highway_secondary", "dist_highway_motorway", "pano_transport_passenger", "pano_transport_buses", "pano_crimes_of_criminal_nature", "pano_edu_13-15", "pano_parks_area", "pano_lawns_area", "pano_green_pc_m2", "pano_bushes_planted", "building_age", "distance_to_center_km", "room_size_m2", "floor_ratio", "building_type_block", "construction_status_ready_to_use", "construction_status_to_renovation", "interior_30", "interior_39", "interior_42", "interior_76", "interior_88", "interior_112", "interior_146", "interior_151", "interior_168", "interior_169", "interior_215", "interior_243", "interior_246", "interior_247", "interior_248", "interior_253", "interior_254", "interior_269", "interior_309", "interior_357", "interior_371", "interior_375", "interior_382", "interior_391", "interior_392", "interior_400", "interior_414", "interior_433", "interior_445", "interior_453", "interior_484", "interior_497", "interior_508"],
+    "metadata": {
+        "method": "rfe",
+        "feature_subset_used": "all",
+        "n_features_selected": 100,
+        "apply_pca_img_transform": false,
+        "apply_scale_transform": false,
+        "include_count": false,
+        "n_estimators": 100,
+        "random_state": 42,
+        "rfe_step_size": null,
+        "n_pca_components": null
+    }
+
+
+}

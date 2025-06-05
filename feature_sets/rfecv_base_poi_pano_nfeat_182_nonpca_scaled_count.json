@@ -187,12 +187,12 @@
         "method": "rfecv",
         "feature_subset_used": "base_poi_pano",
         "n_features_selected": 182,
-        "apply_pca_img_transform": true,
+        "apply_pca_img_transform": false,
         "apply_scale_transform": true,
         "include_count": true,
         "n_estimators": 100,
         "random_state": 42,
         "rfe_step_size": 0.1,
-        "n_pca_components": 0.8
+        "n_pca_components": null
     }
 }
