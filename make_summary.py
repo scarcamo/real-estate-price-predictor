@@ -53,10 +53,11 @@ class MLflowSummarizer:
             return []
     
     def get_runs_for_experiment(self, experiment_id: str) -> List[Dict]:
-        """Get all runs for a specific experiment."""
+        """Get all runs for a specific experiment that are tagged as 'best_run'."""
         try:
             runs = self.client.search_runs(
                 experiment_ids=[experiment_id],
+                filter_string="tags.run_type = 'best_run'",  # Only get best runs
                 max_results=1000  # Adjust if you have more runs
             )
             return runs
@@ -77,11 +78,16 @@ class MLflowSummarizer:
                 'experiment_name': self.experiments.get(run.info.experiment_id, {}).name if hasattr(self.experiments.get(run.info.experiment_id, {}), 'name') else 'Unknown'
             }
             
+            # Extract tags
+            tags = run.data.tags
+            run_info['run_type'] = tags.get('run_type', 'Unknown')
+            run_info['feature_set_tag'] = tags.get('feature_set', 'Unknown')
+            
             # Extract parameters
             params = run.data.params
             run_info.update({
                 'model_name': self._extract_model_name(run),
-                'feature_set': params.get('feature_set', params.get('feature_set_file', 'Unknown')),
+                'feature_set': params.get('feature_set', params.get('feature_set_file', run_info['feature_set_tag'])),
                 'cv_folds': params.get('cv_folds', 'Unknown'),
                 'random_state': params.get('random_state', 'Unknown'),
                 'n_trials_optuna': params.get('n_trials_optuna', 'Unknown'),
@@ -91,18 +97,23 @@ class MLflowSummarizer:
             # Extract metrics
             metrics = run.data.metrics
             
+            # Log available metrics for debugging
+            if metrics:
+                logger.debug(f"Run {run.info.run_id} has metrics: {list(metrics.keys())}")
+            
             # Common metric patterns to look for
             metric_patterns = {
-                'train_score': ['train_score', 'train_cv_score', 'cv_train_score'],
-                'test_score': ['test_score', 'test_cv_score', 'cv_test_score', 'cv_score'],
-                'train_mae': ['train_mae', 'cv_train_mae'],
-                'test_mae': ['test_mae', 'cv_test_mae', 'cv_mae'],
-                'train_mse': ['train_mse', 'cv_train_mse'],
-                'test_mse': ['test_mse', 'cv_test_mse', 'cv_mse'],
-                'train_rmse': ['train_rmse', 'cv_train_rmse'],
-                'test_rmse': ['test_rmse', 'cv_test_rmse', 'cv_rmse'],
-                'train_r2': ['train_r2', 'cv_train_r2'],
-                'test_r2': ['test_r2', 'cv_test_r2', 'cv_r2']
+                'train_score': ['train_final_mape', 'cv_mape'],
+                'test_score': ['test_final_mape', 'best_optuna_cv_mape'],
+                'train_mape': ['train_final_mape'],
+                'test_mape': ['test_final_mape', 'best_optuna_cv_mape'],
+                'train_rmse': ['train_final_rmse'],
+                'test_rmse': ['test_final_rmse'],
+                'train_r2': ['train_final_r2'],
+                'test_r2': ['test_final_r2'],
+                'cv_mape': ['cv_mape', 'best_optuna_cv_mape'],
+                'tuning_duration': ['tuning_duration_sec'],
+                'total_duration': ['total_pipeline_duration_sec']
             }
             
             # Extract metrics based on patterns
@@ -117,6 +128,7 @@ class MLflowSummarizer:
             # Add all available metrics for completeness
             run_info['all_metrics'] = dict(metrics)
             run_info['all_params'] = dict(params)
+            run_info['all_tags'] = dict(tags)
             
             return run_info
             
@@ -153,21 +165,75 @@ class MLflowSummarizer:
         """Collect all runs from all experiments."""
         experiments = self.get_all_experiments()
         all_runs = []
+        total_runs = 0
+        best_runs_count = 0
         
         for experiment in experiments:
             logger.info(f"Processing experiment: {experiment.name}")
             runs = self.get_runs_for_experiment(experiment.experiment_id)
+            total_runs += len(runs)
             
             for run in runs:
                 run_info = self.extract_run_info(run)
                 if run_info and run_info.get('status') == 'FINISHED':
                     all_runs.append(run_info)
+                    if run_info.get('run_type') == 'best_run':
+                        best_runs_count += 1
         
         self.all_runs = all_runs
-        logger.info(f"Collected {len(all_runs)} completed runs")
+        logger.info(f"Collected {len(all_runs)} completed runs out of {total_runs} total runs")
+        logger.info(f"Found {best_runs_count} runs tagged as 'best_run'")
+        
+        # Debug: Show available metrics from a sample of runs
+        if all_runs:
+            sample_run = all_runs[0]
+            logger.info(f"Sample run metrics: {list(sample_run.get('all_metrics', {}).keys())}")
+            
+            # Count runs with different metric types
+            metric_counts = {}
+            for run in all_runs:
+                for metric in run.get('all_metrics', {}):
+                    metric_counts[metric] = metric_counts.get(metric, 0) + 1
+            
+            logger.info("Metric availability across all runs:")
+            for metric, count in sorted(metric_counts.items()):
+                logger.info(f"  {metric}: {count} runs")
+        
         return all_runs
     
-    def find_best_runs(self, metric: str = 'test_score', maximize: bool = True) -> Dict[str, Dict]:
+    def collect_best_runs_by_tag(self) -> List[Dict]:
+        """Collect runs that are tagged as 'best_run'."""
+        if not self.all_runs:
+            self.collect_all_runs()
+        
+        best_runs = [run for run in self.all_runs if run.get('run_type') == 'best_run']
+        logger.info(f"Found {len(best_runs)} runs tagged as 'best_run'")
+        
+        if best_runs:
+            # Group by model-feature combination for summary
+            grouped_runs = {}
+            for run in best_runs:
+                key = f"{run['model_name']}_{run['feature_set']}"
+                if key not in grouped_runs:
+                    grouped_runs[key] = []
+                grouped_runs[key].append(run)
+            
+            # Use the most recent run for each combination if there are duplicates
+            final_best_runs = {}
+            for key, runs in grouped_runs.items():
+                if len(runs) > 1:
+                    logger.warning(f"Multiple best runs found for {key}, using most recent")
+                    most_recent = max(runs, key=lambda x: x['start_time'])
+                    final_best_runs[key] = most_recent
+                else:
+                    final_best_runs[key] = runs[0]
+            
+            self.best_runs = final_best_runs
+            logger.info(f"Selected {len(final_best_runs)} unique best runs")
+        
+        return best_runs
+    
+    def find_best_runs(self, metric: str = 'test_mape', maximize: bool = False) -> Dict[str, Dict]:
         """
         Find the best run for each model-feature_set combination.
         
@@ -223,19 +289,21 @@ class MLflowSummarizer:
                 'model_feature_combination': key,
                 'model_name': run['model_name'],
                 'feature_set': run['feature_set'],
+                'run_type': run.get('run_type'),
                 'experiment_name': run['experiment_name'],
                 'run_id': run['run_id'],
                 'run_name': run['run_name'],
                 'train_score': run.get('train_score'),
                 'test_score': run.get('test_score'),
-                'train_mae': run.get('train_mae'),
-                'test_mae': run.get('test_mae'),
-                'train_mse': run.get('train_mse'),
-                'test_mse': run.get('test_mse'),
+                'train_mape': run.get('train_mape'),
+                'test_mape': run.get('test_mape'),
                 'train_rmse': run.get('train_rmse'),
                 'test_rmse': run.get('test_rmse'),
                 'train_r2': run.get('train_r2'),
                 'test_r2': run.get('test_r2'),
+                'cv_mape': run.get('cv_mape'),
+                'tuning_duration': run.get('tuning_duration'),
+                'total_duration': run.get('total_duration'),
                 'cv_folds': run.get('cv_folds'),
                 'n_trials_optuna': run.get('n_trials_optuna'),
                 'tuning_scoring_metric': run.get('tuning_scoring_metric'),
@@ -287,21 +355,60 @@ class MLflowSummarizer:
         if 'json' in formats:
             json_path = os.path.join(output_dir, f"best_models_report_{timestamp}.json")
             
-            # Create detailed JSON report
+            # Create detailed JSON report with comprehensive run information
+            best_runs_detailed = {}
+            for key, run in self.best_runs.items():
+                best_runs_detailed[key] = {
+                    'basic_info': {
+                        'run_id': run['run_id'],
+                        'run_name': run['run_name'],
+                        'experiment_name': run['experiment_name'],
+                        'model_name': run['model_name'],
+                        'feature_set': run['feature_set'],
+                        'run_type': run.get('run_type'),
+                        'start_time': run['start_time'].isoformat() if run['start_time'] else None,
+                        'end_time': run['end_time'].isoformat() if run['end_time'] else None,
+                        'status': run['status']
+                    },
+                    'performance_metrics': {
+                        'train_score': run.get('train_score'),
+                        'test_score': run.get('test_score'),
+                        'train_mape': run.get('train_mape'),
+                        'test_mape': run.get('test_mape'),
+                        'train_rmse': run.get('train_rmse'),
+                        'test_rmse': run.get('test_rmse'),
+                        'train_r2': run.get('train_r2'),
+                        'test_r2': run.get('test_r2'),
+                        'cv_mape': run.get('cv_mape'),
+                        'tuning_duration': run.get('tuning_duration'),
+                        'total_duration': run.get('total_duration')
+                    },
+                    'hyperparameters': run.get('all_params', {}),
+                    'tags': run.get('all_tags', {}),
+                    'all_metrics': run.get('all_metrics', {}),
+                    'training_config': {
+                        'cv_folds': run.get('cv_folds'),
+                        'random_state': run.get('random_state'),
+                        'n_trials_optuna': run.get('n_trials_optuna'),
+                        'tuning_scoring_metric': run.get('tuning_scoring_metric')
+                    }
+                }
+            
             report = {
                 'metadata': {
                     'generated_at': datetime.now().isoformat(),
                     'total_experiments': len(self.experiments),
                     'total_runs_analyzed': len(self.all_runs),
                     'best_runs_found': len(self.best_runs),
-                    'optimization_metric': getattr(self, '_optimization_metric', 'test_score')
+                    'optimization_metric': getattr(self, '_optimization_metric', 'test_score'),
+                    'description': 'Comprehensive report of best performing models with all hyperparameters, tags, and metrics'
                 },
                 'summary_statistics': {
                     'unique_models': df['model_name'].nunique() if not df.empty else 0,
                     'unique_feature_sets': df['feature_set'].nunique() if not df.empty else 0,
                     'unique_experiments': df['experiment_name'].nunique() if not df.empty else 0
                 },
-                'best_runs': self.best_runs,
+                'best_runs_detailed': best_runs_detailed,
                 'summary_table': df.to_dict('records') if not df.empty else []
             }
             
@@ -322,7 +429,7 @@ class MLflowSummarizer:
                         # Model comparison
                         model_summary = df.groupby('model_name').agg({
                             'test_score': ['count', 'mean', 'std', 'max', 'min'],
-                            'test_mae': ['mean', 'std', 'min'] if 'test_mae' in df.columns else None
+                            'test_mape': ['mean', 'std', 'min'] if 'test_mape' in df.columns else None
                         }).round(4)
                         model_summary.columns = ['_'.join(col).strip() for col in model_summary.columns]
                         model_summary.to_excel(writer, sheet_name='Model_Comparison')
@@ -330,7 +437,7 @@ class MLflowSummarizer:
                         # Feature set comparison
                         feature_summary = df.groupby('feature_set').agg({
                             'test_score': ['count', 'mean', 'std', 'max', 'min'],
-                            'test_mae': ['mean', 'std', 'min'] if 'test_mae' in df.columns else None
+                            'test_mape': ['mean', 'std', 'min'] if 'test_mape' in df.columns else None
                         }).round(4)
                         feature_summary.columns = ['_'.join(col).strip() for col in feature_summary.columns]
                         feature_summary.to_excel(writer, sheet_name='FeatureSet_Comparison')
@@ -370,7 +477,7 @@ class MLflowSummarizer:
         print("-"*80)
         
         # Display top runs
-        display_columns = ['model_name', 'feature_set', 'test_score', 'train_score', 'test_mae', 'test_rmse']
+        display_columns = ['model_name', 'feature_set', 'test_score', 'train_score', 'test_mape', 'test_rmse']
         available_columns = [col for col in display_columns if col in df.columns and df[col].notna().any()]
         
         top_runs = df.head(top_n)[available_columns]
@@ -394,35 +501,34 @@ def main():
     # Initialize summarizer
     summarizer = MLflowSummarizer()
     
-    # Collect all runs
-    logger.info("Collecting all experiment runs...")
+    # Collect runs tagged as 'best_run'
+    logger.info("Collecting runs tagged as 'best_run'...")
     summarizer.collect_all_runs()
     
     if not summarizer.all_runs:
-        logger.error("No completed runs found in MLflow")
+        logger.error("No runs tagged as 'best_run' found in MLflow")
         return
     
-    # Find best runs (you can modify the metric and direction here)
-    logger.info("Finding best runs...")
+    # Use the collected best runs directly for the summary
+    grouped_runs = {}
+    for run in summarizer.all_runs:
+        key = f"{run['model_name']}_{run['feature_set']}"
+        if key not in grouped_runs:
+            grouped_runs[key] = []
+        grouped_runs[key].append(run)
     
-    # Try different metrics to find the best optimization criterion
-    metrics_to_try = ['test_score', 'cv_score', 'test_r2', 'cv_r2']
-    best_metric = None
+    # Use the most recent run for each combination if there are duplicates
+    final_best_runs = {}
+    for key, runs in grouped_runs.items():
+        if len(runs) > 1:
+            logger.warning(f"Multiple best runs found for {key}, using most recent")
+            most_recent = max(runs, key=lambda x: x['start_time'])
+            final_best_runs[key] = most_recent
+        else:
+            final_best_runs[key] = runs[0]
     
-    for metric in metrics_to_try:
-        test_runs = [run for run in summarizer.all_runs if run.get(metric) is not None]
-        if test_runs:
-            best_metric = metric
-            logger.info(f"Using '{metric}' as optimization metric ({len(test_runs)} runs have this metric)")
-            break
-    
-    if not best_metric:
-        logger.error("No suitable optimization metric found in the runs")
-        return
-    
-    # Find best runs
-    summarizer._optimization_metric = best_metric
-    summarizer.find_best_runs(metric=best_metric, maximize=True)
+    summarizer.best_runs = final_best_runs
+    logger.info(f"Selected {len(final_best_runs)} unique best runs")
     
     # Print summary to console
     summarizer.print_summary(top_n=15)
