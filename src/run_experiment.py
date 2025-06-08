@@ -1,7 +1,7 @@
 import logging
 import os
 import random
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import mlflow
 import numpy as np
@@ -95,9 +95,10 @@ def update_config_from_metadata(config: Dict[str, Any], metadata: Dict[str, Any]
     
     config_updates = {
         "apply_scale_transform": "apply_scale_transform",
-        "apply_pca_img_transform": "apply_pca_img_transform",
+        "apply_pca_img_transform": "apply_pca_img_transform", 
         "random_state": "random_state",
-        "n_pca_components": "n_pca_components"
+        "n_pca_components": "n_pca_components",
+        "INCLUDE_LOCATION_FEATURES": "include_location_features"
     }
     
     for config_key, metadata_key in config_updates.items():
@@ -214,23 +215,24 @@ def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str, sco
         logging.error(f"Error in experiment for feature set {feature_set} with {scoring_metric}: {e}", exc_info=True)
         raise
 
-def main():
+def run_experiment_main(feature_sets: Optional[List[str]] = None, scoring_metrics: Optional[List[str]] = None):
     logging.info("--- Starting Experiments ---")
     
-    # Load configuration using simplified approach
     try:
         config = load_config()
     except Exception as e:
         logging.error(f"Error loading configuration: {e}", exc_info=True)
         raise
-    
-    # Ensure scoring_metrics is always a list
-    scoring_metrics = config["optuna"]["scoring_metric"]
-    if isinstance(scoring_metrics, str):
-        scoring_metrics = [scoring_metrics]
+
+    if feature_sets is None:
+        feature_sets = config["feature_sets"]
+    if scoring_metrics is None:
+        scoring_metrics = config["optuna"]["scoring_metric"]    
+        if isinstance(scoring_metrics, str):
+            scoring_metrics = [scoring_metrics]
     
     # Run experiments for each combination of feature set and scoring metric
-    for feature_set in config["feature_sets"]:
+    for feature_set in feature_sets:
         for scoring_metric in scoring_metrics:
             try:
                 run_experiment_for_feature_set(config, feature_set, scoring_metric)
@@ -241,4 +243,4 @@ def main():
     logging.info("\n--- All Experiments Finished ---")
 
 if __name__ == "__main__":
-    main() 
+    run_experiment_main() 

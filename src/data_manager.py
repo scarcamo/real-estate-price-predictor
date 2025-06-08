@@ -12,6 +12,7 @@ class DataManager:
         self.target_variable = config.get("TARGET_VARIABLE")
         self.district_col_name = "district"
         self.outlier_col_name = "outlier"
+        self.include_location_features = config.get("INCLUDE_LOCATION_FEATURES", False)
         
         self.X_train_full_raw = None
         self.X_test_full_raw = None
@@ -52,9 +53,18 @@ class DataManager:
         self.original_categorical_cols = self.X_train_full_raw.select_dtypes(
             include=["object", "category"]
         ).columns.tolist()
-        self.original_categorical_cols = [
-            col for col in self.original_categorical_cols if col != self.district_col_name
-        ]
+        
+        # Handle location features based on setting
+        location_features = [self.district_col_name, "neighborhood"]
+        
+        if not self.include_location_features:
+            # Remove location features from categorical columns if not including them
+            self.original_categorical_cols = [
+                col for col in self.original_categorical_cols if col not in location_features
+            ]
+            logging.info(f"Excluding location features {location_features} from categorical columns")
+        else:
+            logging.info(f"Including location features {location_features} in categorical columns")
 
         logging.info(f"Original Numeric Cols: {len(self.original_numeric_cols)}")
         logging.info(f"Original Categorical Cols: {len(self.original_categorical_cols)}")
@@ -90,11 +100,12 @@ class DataManager:
 
     def create_data_transformer(self, apply_scaling: bool, apply_pca: bool, n_pca_components: int):
         """Create a data transformer pipeline"""
+        # ALWAYS use district for grouped imputation
         return create_data_transformer_pipeline(
             numeric_cols=self.original_numeric_cols,
             categorical_cols=self.original_categorical_cols,
             img_feature_cols=self.original_img_cols,
-            district_group_col=self.district_col_name,
+            district_group_col=self.district_col_name, 
             outlier_indicator_col=self.outlier_col_name,
             apply_scaling_and_transform=apply_scaling,
             apply_pca=apply_pca,

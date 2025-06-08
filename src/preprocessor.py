@@ -204,11 +204,9 @@ def create_data_transformer_pipeline(
     )
 
     # The full preprocessing pipeline
-    data_transformer_pipeline = Pipeline(
-        [
-            ("grouped_imputation", grouped_imputer),
-            ("column_transformations", feature_processor_ct),
-        ]
-    )
+    data_transformer_pipeline = Pipeline([
+        ("grouped_imputation", grouped_imputer),
+        ("column_transformations", feature_processor_ct),
+    ])
 
     return data_transformer_pipeline
