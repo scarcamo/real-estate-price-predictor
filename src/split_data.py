@@ -4,7 +4,6 @@ from sklearn.model_selection import train_test_split
 
 
 TARGET_VARIABLE = "price"
-N_SAMPLES = None
 RANDOM_STATE = 42
 
 
@@ -97,18 +96,20 @@ def get_train_test_img() -> tuple:
     return img_train, img_test
 
 
-if __name__ == "__main__":
+def split_data(n_samples: int = None):
+    base_path = os.path.join(os.path.dirname(__file__), "..", "data")
+
     df = pd.read_csv(
-        os.path.join("data", "real_estate_thesis_processed.csv"), index_col=0
+       os.path.join(base_path, "real_estate_thesis_processed.csv"), index_col=0
     )
 
-    img_data = pd.read_csv(os.path.join(os.path.dirname(__file__), '..', "data", "img_interior_max.csv"))
+    img_data = pd.read_csv(os.path.join(base_path, "img_interior_max.csv"))
     img_data.set_index("id", inplace=True)
 
     df = df.merge(img_data, left_index=True, right_index=True, how="left")
 
-    if N_SAMPLES:
-        df = df.sample(n=N_SAMPLES, random_state=RANDOM_STATE)
+    if n_samples:
+        df = df.sample(n=n_samples, random_state=RANDOM_STATE)
 
     X_train, X_test, y_train, y_test = stratified_split(
         df,
@@ -118,7 +119,6 @@ if __name__ == "__main__":
         random_state=RANDOM_STATE,
     )
 
-    base_path = os.path.join(os.path.dirname(__file__), '..', "data")
     X_train.to_csv(os.path.join(base_path, "X_train.csv"), index=True)
     X_test.to_csv(os.path.join(base_path, "X_test.csv"), index=True)
     y_train.to_csv(os.path.join(base_path, "y_train.csv"), index=True)
@@ -135,3 +135,8 @@ if __name__ == "__main__":
 
     img_train.to_csv(os.path.join(base_path, "img_train.csv"), index=True)
     img_test.to_csv(os.path.join(base_path, "img_test.csv"), index=True)
+
+    print(f"Split data into train and test sets with {len(train_ids)} and {len(test_ids)} samples respectively.")
+
+if __name__ == "__main__":
+    split_data()
