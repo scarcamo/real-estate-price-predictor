@@ -71,6 +71,7 @@ class ModelTrainer:
         self.data_manager = data_manager
         self.model_prefix = "model__"
         self.feature_set_name = feature_set_name
+        self.experiment_version = config.get("experiment_version", "v1")
         
     def train_evaluate_log(
         self,
@@ -252,7 +253,7 @@ class ModelTrainer:
     def _setup_optuna_study(self, model_name: str) -> optuna.Study:
         """Setup Optuna study"""
         scoring_metric = self.config["optuna"]["scoring_metric"]
-        study_name = f"{model_name}_{self.feature_set_name}_{scoring_metric}_study"
+        study_name = f"{model_name}_{self.feature_set_name}_{scoring_metric}_{self.experiment_version}_study"
         logging.info(f"Using Optuna study '{study_name}' with storage '{self.config['optuna']['study_db_path']}'")
 
         study = optuna.create_study(
@@ -266,6 +267,7 @@ class ModelTrainer:
         study.set_user_attr("run_type", "optuna_run")
         study.set_user_attr("model_name", model_name)
         study.set_user_attr("feature_set_name", self.feature_set_name)
+        study.set_user_attr("experiment_version", self.experiment_version)
         study.set_user_attr("scoring_metric", scoring_metric)
         study.set_user_attr("cv_folds", self.config["CV_FOLDS"])
         study.set_user_attr("random_state", self.config["RANDOM_STATE"])
@@ -389,7 +391,7 @@ class ModelTrainer:
             run_tags["mlflow.parentRunId"] = parent_run_id
 
         with mlflow.start_run(
-            run_name=f"{model_name}_{self.feature_set_name}_{self.config['optuna']['scoring_metric']}_BEST",
+            run_name=f"{model_name}_{self.feature_set_name}_{self.config['optuna']['scoring_metric']}_{self.experiment_version}_BEST",
             tags=run_tags,
             nested=True,
         ) as run:
@@ -426,6 +428,7 @@ class ModelTrainer:
     ) -> None:
         """Log all relevant information to MLflow"""
         mlflow.set_tag("run_type", "best_run")
+        mlflow.set_tag("experiment_version", self.experiment_version)
         mlflow.log_param("model_name", model_name)
         mlflow.set_tag("feature_set", self.feature_set_name)
         mlflow.log_param("num_selected_features", len(final_valid_selected_names))
