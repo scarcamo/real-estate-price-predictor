@@ -91,7 +91,10 @@ class MLflowSummarizer:
                 'cv_folds': params.get('cv_folds', 'Unknown'),
                 'random_state': params.get('random_state', 'Unknown'),
                 'n_trials_optuna': params.get('n_trials_optuna', 'Unknown'),
-                'tuning_scoring_metric': params.get('tuning_scoring_metric', 'Unknown')
+                'tuning_scoring_metric': params.get('tuning_scoring_metric', 'Unknown'),
+                # Feature selection parameters
+                'num_selected_features': params.get('num_selected_features', None),
+                'n_features_selected': params.get('n_features_selected', None)
             })
             
             # Extract metrics
@@ -285,6 +288,23 @@ class MLflowSummarizer:
         # Prepare data for DataFrame
         summary_data = []
         for key, run in self.best_runs.items():
+            # Extract feature selection values
+            num_selected_features = run.get('num_selected_features')
+            n_features_selected = run.get('n_features_selected')
+            
+            # Calculate feature mismatch
+            feature_mismatch = None
+            if num_selected_features is not None and n_features_selected is not None:
+                try:
+                    # Convert to int for comparison (in case they're strings)
+                    num_selected = int(num_selected_features) if num_selected_features is not None else None
+                    n_features = int(n_features_selected) if n_features_selected is not None else None
+                    
+                    if num_selected is not None and n_features is not None:
+                        feature_mismatch = num_selected - n_features
+                except (ValueError, TypeError):
+                    feature_mismatch = None
+            
             summary_row = {
                 'model_feature_combination': key,
                 'model_name': run['model_name'],
@@ -293,6 +313,11 @@ class MLflowSummarizer:
                 'experiment_name': run['experiment_name'],
                 'run_id': run['run_id'],
                 'run_name': run['run_name'],
+                # Feature selection comparison columns
+                'num_selected_features': num_selected_features,
+                'n_features_selected': n_features_selected,
+                'feature_mismatch': feature_mismatch,
+                'feature_count_match': feature_mismatch==0 if feature_mismatch is not None else None,
                 'train_score': run.get('train_score'),
                 'test_score': run.get('test_score'),
                 'train_mape': run.get('train_mape'),
@@ -391,6 +416,11 @@ class MLflowSummarizer:
                         'random_state': run.get('random_state'),
                         'n_trials_optuna': run.get('n_trials_optuna'),
                         'tuning_scoring_metric': run.get('tuning_scoring_metric')
+                    },
+                    'feature_selection_info': {
+                        'num_selected_features': run.get('num_selected_features'),
+                        'n_features_selected': run.get('n_features_selected'),
+                        'feature_mismatch': run.get('feature_mismatch')
                     }
                 }
             
@@ -476,12 +506,24 @@ class MLflowSummarizer:
         print("TOP PERFORMING RUNS:")
         print("-"*80)
         
-        # Display top runs
-        display_columns = ['model_name', 'feature_set', 'test_score', 'train_score', 'test_mape', 'test_rmse']
+        # Display top runs with feature selection info
+        display_columns = ['model_name', 'feature_set', 'num_selected_features', 'n_features_selected', 'feature_mismatch', 'test_score', 'train_score', 'test_mape', 'test_rmse']
         available_columns = [col for col in display_columns if col in df.columns and df[col].notna().any()]
         
         top_runs = df.head(top_n)[available_columns]
         print(top_runs.to_string(index=False, float_format='%.4f'))
+        
+        # Check for feature mismatches
+        if 'feature_mismatch' in df.columns:
+            mismatch_runs = df[df['feature_mismatch'] != 0].copy()
+            if not mismatch_runs.empty:
+                print("\n" + "-"*80)
+                print("FEATURE MISMATCH DETECTED:")
+                print("-"*80)
+                mismatch_summary = mismatch_runs[['model_name', 'feature_set', 'num_selected_features', 'n_features_selected', 'feature_mismatch']]
+                print(mismatch_summary.to_string(index=False))
+            else:
+                print("\n✓ No feature mismatches detected across all runs")
         
         # Display model performance summary
         if 'test_score' in df.columns:
@@ -512,7 +554,7 @@ def main():
     # Use the collected best runs directly for the summary
     grouped_runs = {}
     for run in summarizer.all_runs:
-        key = f"{run['model_name']}_{run['feature_set']}"
+        key = f"{run['model_name']}_{run['feature_set']}_{run['n_trials_optuna']}_{run['tuning_scoring_metric']}"
         if key not in grouped_runs:
             grouped_runs[key] = []
         grouped_runs[key].append(run)

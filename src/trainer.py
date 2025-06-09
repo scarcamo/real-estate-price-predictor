@@ -93,7 +93,7 @@ class ModelTrainer:
             )):
                 try:
                     fold_score = self._process_fold(
-                        trial, fold_idx, train_idx, val_idx, model_name, model_config, selected_feature_names
+                        trial, fold_idx, train_idx, val_idx, model_name, model_config, selected_feature_names, feature_selection_metadata
                     )
                     if fold_score is not None:
                         fold_scores.append(fold_score)
@@ -117,7 +117,7 @@ class ModelTrainer:
         study.optimize(
             objective,
             n_trials=self.config["optuna"]["n_trials"],
-            callbacks=[mlflow_callback],
+            # callbacks=[mlflow_callback],
             n_jobs=1,
             gc_after_trial=True,
         )
@@ -140,7 +140,7 @@ class ModelTrainer:
 
         return final_run_id, study
 
-    def _process_fold(self, trial, fold_idx, train_idx, val_idx, model_name, model_config, selected_feature_names):
+    def _process_fold(self, trial, fold_idx, train_idx, val_idx, model_name, model_config, selected_feature_names, feature_selection_metadata=None):
         """Process a single cross-validation fold"""
         # Get data for this fold
         X_fold_train_raw = self.data_manager.X_train_full_raw.iloc[train_idx]
@@ -148,11 +148,24 @@ class ModelTrainer:
         X_fold_val_raw = self.data_manager.X_train_full_raw.iloc[val_idx]
         y_fold_val_log = self.data_manager.get_log_transformed_target().iloc[val_idx]
 
+        # Use feature selection metadata when available, otherwise fall back to config
+        if feature_selection_metadata:
+            apply_scaling = feature_selection_metadata.get("apply_scale_transform", self.config["APPLY_SCALE_TRANSFORM"])
+            apply_pca = feature_selection_metadata.get("apply_pca_img_transform", self.config["APPLY_PCA_IMG_TRANSFORM"])
+            n_pca_components = feature_selection_metadata.get("n_pca_components", self.config["N_PCA_COMPONENTS"])
+            logging.info(f"Fold {fold_idx}: Using feature selection metadata for transformer - "
+                        f"scaling={apply_scaling}, pca={apply_pca}, n_components={n_pca_components}")
+        else:
+            apply_scaling = self.config["APPLY_SCALE_TRANSFORM"]
+            apply_pca = self.config["APPLY_PCA_IMG_TRANSFORM"]
+            n_pca_components = self.config["N_PCA_COMPONENTS"]
+            logging.warning(f"Fold {fold_idx}: No feature selection metadata available, using config defaults")
+
         # Create and fit transformer
         current_data_transformer = self.data_manager.create_data_transformer(
-            apply_scaling=self.config["APPLY_SCALE_TRANSFORM"],
-            apply_pca=self.config["APPLY_PCA_IMG_TRANSFORM"],
-            n_pca_components=self.config["N_PCA_COMPONENTS"]
+            apply_scaling=apply_scaling,
+            apply_pca=apply_pca,
+            n_pca_components=n_pca_components
         )
         current_data_transformer.fit(X_fold_train_raw.copy(), y_fold_train_log)
         
@@ -177,15 +190,35 @@ class ModelTrainer:
             logging.error(f"Fold {fold_idx}: Error getting feature names from transformer: {e}. Skipping fold.")
             return None
 
-        # Validate and select features
+        # Validate and select features with detailed reporting
         valid_selected_names_fold = [
             name for name in selected_feature_names
             if name in X_fold_train_processed_df.columns
         ]
         
+        missing_features = [
+            name for name in selected_feature_names
+            if name not in X_fold_train_processed_df.columns
+        ]
+        
+        if missing_features:
+            logging.error(f"Fold {fold_idx}: FEATURE MISMATCH DETECTED! Missing {len(missing_features)} features: {missing_features[:10]}{'...' if len(missing_features) > 10 else ''}")
+            if feature_selection_metadata:
+                logging.error(f"Fold {fold_idx}: Feature selection metadata: {feature_selection_metadata}")
+            else:
+                logging.error(f"Fold {fold_idx}: No feature selection metadata provided!")
+            raise ValueError(f"Fold {fold_idx}: FEATURE MISMATCH DETECTED! Missing {len(missing_features)} features: {missing_features[:10]}{'...' if len(missing_features) > 10 else ''}")
+        
         if not valid_selected_names_fold:
-            logging.warning(f"Fold {fold_idx}: No valid selected features remaining after transformation.")
+            logging.error(f"Fold {fold_idx}: CRITICAL ERROR - No valid selected features remaining after transformation!")
+            logging.error(f"Fold {fold_idx}: Selected features count: {len(selected_feature_names)}, Available features count: {len(X_fold_train_processed_df.columns)}")
+            logging.error(f"Fold {fold_idx}: First 10 selected features: {selected_feature_names[:10]}")
+            logging.error(f"Fold {fold_idx}: First 10 available features: {list(X_fold_train_processed_df.columns)[:10]}")
             return None
+        
+        if len(valid_selected_names_fold) != len(selected_feature_names):
+            logging.warning(f"Fold {fold_idx}: Feature count mismatch - Expected: {len(selected_feature_names)}, Got: {len(valid_selected_names_fold)}")
+            raise ValueError(f"Fold {fold_idx}: Feature count mismatch - Expected: {len(selected_feature_names)}, Got: {len(valid_selected_names_fold)}")
 
         X_fold_train_selected = X_fold_train_processed_df[valid_selected_names_fold]
         X_fold_val_selected = X_fold_val_processed_df[valid_selected_names_fold]
@@ -268,11 +301,24 @@ class ModelTrainer:
         """Train and log the final model using the best parameters"""
         logging.info(f"Training final model for {model_name} using best parameters...")
 
+        # Use feature selection metadata when available, otherwise fall back to config
+        if feature_selection_metadata:
+            apply_scaling = feature_selection_metadata.get("apply_scale_transform", self.config["APPLY_SCALE_TRANSFORM"])
+            apply_pca = feature_selection_metadata.get("apply_pca_img_transform", self.config["APPLY_PCA_IMG_TRANSFORM"])
+            n_pca_components = feature_selection_metadata.get("n_pca_components", self.config["N_PCA_COMPONENTS"])
+            logging.info(f"Final model: Using feature selection metadata for transformer - "
+                        f"scaling={apply_scaling}, pca={apply_pca}, n_components={n_pca_components}")
+        else:
+            apply_scaling = self.config["APPLY_SCALE_TRANSFORM"]
+            apply_pca = self.config["APPLY_PCA_IMG_TRANSFORM"]
+            n_pca_components = self.config["N_PCA_COMPONENTS"]
+            logging.warning(f"Final model: No feature selection metadata available, using config defaults")
+
         # Create and fit final transformer
         final_data_transformer = self.data_manager.create_data_transformer(
-            apply_scaling=self.config["APPLY_SCALE_TRANSFORM"],
-            apply_pca=self.config["APPLY_PCA_IMG_TRANSFORM"],
-            n_pca_components=self.config["N_PCA_COMPONENTS"]
+            apply_scaling=apply_scaling,
+            apply_pca=apply_pca,
+            n_pca_components=n_pca_components
         )
         final_data_transformer.fit(
             self.data_manager.X_train_full_raw.copy(), 
@@ -282,15 +328,33 @@ class ModelTrainer:
         # Transform data
         X_train_processed_final_df, X_test_processed_final_df = self.data_manager.get_transformed_data(final_data_transformer)
 
-        # Validate and select features
+        # Validate and select features with detailed reporting
         final_valid_selected_names = [
             name for name in selected_feature_names
             if name in X_train_processed_final_df.columns
         ]
 
+        missing_features = [
+            name for name in selected_feature_names
+            if name not in X_train_processed_final_df.columns
+        ]
+        
+        if missing_features:
+            logging.error(f"Final model: FEATURE MISMATCH DETECTED! Missing {len(missing_features)} features: {missing_features[:10]}{'...' if len(missing_features) > 10 else ''}")
+            if feature_selection_metadata:
+                logging.error(f"Final model: Feature selection metadata: {feature_selection_metadata}")
+            else:
+                logging.error(f"Final model: No feature selection metadata provided!")
+
         if not final_valid_selected_names:
-            logging.error(f"Error: No valid selected features for the final model {model_name}.")
+            logging.error(f"Final model: CRITICAL ERROR - No valid selected features for the final model {model_name}!")
+            logging.error(f"Final model: Selected features count: {len(selected_feature_names)}, Available features count: {len(X_train_processed_final_df.columns)}")
+            logging.error(f"Final model: First 10 selected features: {selected_feature_names[:10]}")
+            logging.error(f"Final model: First 10 available features: {list(X_train_processed_final_df.columns)[:10]}")
             return None
+        
+        if len(final_valid_selected_names) != len(selected_feature_names):
+            logging.warning(f"Final model: Feature count mismatch - Expected: {len(selected_feature_names)}, Got: {len(final_valid_selected_names)}")
 
         X_train_selected_final = X_train_processed_final_df[final_valid_selected_names]
         X_test_selected_final = X_test_processed_final_df[final_valid_selected_names]

@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.feature_selection import RFE, RFECV, SelectFromModel
-from sklearn.inspection import permutation_importance
 from sklearn.model_selection import KFold
 
 from src.config import load_config
