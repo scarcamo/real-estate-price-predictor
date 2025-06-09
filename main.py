@@ -58,27 +58,6 @@ def run_feature_selection():
         from feature_selection import run_feature_selection
         
         output_filenames = []
-        output_filename = run_feature_selection(
-            method="rfecv",
-            output_dir="feature_sets",
-            feature_subset="all",
-            apply_scale_transform=False,
-            apply_pca_img_transform=True,
-            n_pca_components=0.8,
-            rfe_step_size=10,
-        )
-        output_filenames.append(output_filename)
-
-        output_filename = run_feature_selection(
-            method="rfecv",
-            output_dir="feature_sets",
-            feature_subset="all",
-            apply_scale_transform=False,
-            apply_pca_img_transform=False,
-            n_pca_components=None,
-            rfe_step_size=10,
-        )
-        output_filenames.append(output_filename)
 
         output_filename = run_feature_selection(
             method="rfecv",
@@ -88,8 +67,48 @@ def run_feature_selection():
             apply_pca_img_transform=False,
             n_pca_components=None,
             rfe_step_size=None,
+            include_location_features=True,
         )
         output_filenames.append(output_filename)
+
+        output_filename = run_feature_selection(
+            method="rfecv",
+            output_dir="feature_sets",
+            feature_subset="all",
+            apply_scale_transform=False,
+            apply_pca_img_transform=True,
+            n_pca_components=0.8,
+            rfe_step_size=10,
+            include_location_features=True,
+        )
+        output_filenames.append(output_filename)
+
+        output_filename = run_feature_selection(
+            method="rfecv",
+            output_dir="feature_sets",
+            feature_subset="all",
+            apply_scale_transform=False,
+            apply_pca_img_transform=False,
+            n_pca_components=None,
+            rfe_step_size=10,
+            include_location_features=True,
+        )
+        output_filenames.append(output_filename)
+
+        output_filename = run_feature_selection(
+            method="rfecv",
+            output_dir="feature_sets",
+            feature_subset="base_poi_pano",
+            apply_scale_transform=False,
+            apply_pca_img_transform=False,
+            n_pca_components=None,
+            rfe_step_size=10,
+            include_location_features=True,
+        )
+        
+        output_filenames.append(output_filename)
+
+
         
         logger.info("✅ Feature selection completed")
         return output_filenames
@@ -185,6 +204,7 @@ def main():
         sys.exit(1)
     else:
         logger.info("🎉 Pipeline completed successfully!")
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()

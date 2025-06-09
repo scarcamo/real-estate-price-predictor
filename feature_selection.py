@@ -135,34 +135,34 @@ def get_output_filename(method, feature_subset, **kwargs):
 
     return "_".join(filename_parts) + ".json"
 
-def get_culled_features(X_train_processed, y_train, n_features_after_culling=200):
-    print(f"Culling features from {X_train_processed.shape[1]} to {n_features_after_culling}")
+def get_filtered_features(X_train_processed, y_train, n_features_after_filter=200):
+    print(f"Filter features from {X_train_processed.shape[1]} to {n_features_after_filter}")
 
-    culling_estimator = RandomForestRegressor(
+    filter_estimator = RandomForestRegressor(
     n_estimators=N_ESTIMATORS, # Using 100 is fast and effective
     random_state=RANDOM_STATE,
     n_jobs=-1
     )
 
-    culling_selector = SelectFromModel(
-    culling_estimator,
-    max_features=n_features_after_culling,
+    filter_selector = SelectFromModel(
+    filter_estimator,
+    max_features=n_features_after_filter,
     threshold=-np.inf
     )
     y_train_log = np.log1p(y_train)
-    culling_selector.fit(X_train_processed, y_train_log)
-    X_train_culled_np = culling_selector.transform(X_train_processed)
-    culled_feature_names = X_train_processed.columns[culling_selector.get_support()].tolist()
+    filter_selector.fit(X_train_processed, y_train_log)
+    X_train_filtered_np = filter_selector.transform(X_train_processed)
+    filtered_feature_names = X_train_processed.columns[filter_selector.get_support()].tolist()
     
     # Convert back to DataFrame to preserve column names
-    X_train_culled = pd.DataFrame(
-        X_train_culled_np, 
-        columns=culled_feature_names, 
+    X_train_filtered = pd.DataFrame(
+        X_train_filtered_np, 
+        columns=filtered_feature_names, 
         index=X_train_processed.index
     )
 
-    print(f"Culled {len(culled_feature_names)} features from {X_train_processed.shape[1]} to {n_features_after_culling}")
-    return X_train_culled, culled_feature_names
+    print(f"Filtered {len(filtered_feature_names)} features from {X_train_processed.shape[1]} to {n_features_after_filter}")
+    return X_train_filtered, filtered_feature_names
 
 def run_feature_selection(
     method="rf",
@@ -175,6 +175,7 @@ def run_feature_selection(
     apply_pca_img_transform=None,
     n_pca_components=None,
     rfe_step_size=None,
+    include_location_features=None,
 ):
     # Use config defaults if parameters are not provided
     if apply_scale_transform is None:
@@ -185,6 +186,8 @@ def run_feature_selection(
         n_pca_components = N_PCA_COMPONENTS
     if rfe_step_size is None:
         rfe_step_size = RFE_STEP_SIZE
+    if include_location_features is None:
+        include_location_features = INCLUDE_LOCATION_FEATURES
 
     if method == "rfe" and not n_features:
         raise ValueError("n_features must be specified for RFE method.")
@@ -251,7 +254,7 @@ def run_feature_selection(
     # Handle location features based on toggle
     location_features = [district_col_name, "neighborhood"]
     
-    if INCLUDE_LOCATION_FEATURES:
+    if include_location_features:
         print(f"Including location features in feature selection: {location_features}")
         # Add location features to categorical columns if they exist in the data
         for loc_col in location_features:
@@ -265,18 +268,17 @@ def run_feature_selection(
         # PCA should only be applied if we have image features AND the parameter is True
     should_apply_pca = apply_pca_img_transform and bool(img_cols_in_subset)
     
-    # ALWAYS use district for grouped imputation - this is essential for data quality
-    # The INCLUDE_LOCATION_FEATURES toggle only controls whether district/neighborhood 
-    # are included as categorical features for the model
+
     data_transformer = create_data_transformer_pipeline(
         numeric_cols=numeric_cols_list,
         categorical_cols=categorical_cols_list,
-        img_feature_cols=img_cols_in_subset,  # Pass only relevant img cols
-        district_group_col=district_col_name,  # ALWAYS use for imputation grouping
+        img_feature_cols=img_cols_in_subset, 
+        district_group_col=district_col_name,  
         outlier_indicator_col=outlier_col_name,
         apply_scaling_and_transform=apply_scale_transform,
         apply_pca=should_apply_pca,
         n_pca_components=n_pca_components if should_apply_pca else None,
+        include_location_features=include_location_features,
     )
 
     print("Fitting data transformer on X_train for feature selection...")
@@ -316,8 +318,8 @@ def run_feature_selection(
     print(f"X_train_processed shape: {X_train_processed.shape}")
     print(f"Performing feature selection {method}...")
 
-    # Track if culling was performed for proper feature name extraction
-    was_culled = False
+    # Track if filter was performed for proper feature name extraction
+    was_filtered = False
 
     if method == "rf":
         selector_estimator = RandomForestRegressor(
@@ -347,11 +349,32 @@ def run_feature_selection(
         selected_features_mask = selector.get_support()
 
     elif method == "rfecv":
-        if X_train_processed.shape[1] > 200:
-            X_train_processed, culled_feature_names = get_culled_features(X_train_processed, y_train_log, n_features_after_culling=200)
-            print(f"Culled {len(culled_feature_names)} features from {X_train_processed.shape[1]} to 200")
-            logger.info(f"Culled {len(culled_feature_names)} features from {X_train_processed.shape[1]} to 200")
+        TARGET_FEATURES = 200
+        # Reduce features in stages if there are more features than the target
+        while X_train_processed.shape[1] > TARGET_FEATURES:
+            n_features_before = X_train_processed.shape[1]
+            
+            # Determine the number of features for the next stage.
+            # If we have a lot more features than the target (e.g. > 400), we halve them.
+            # Otherwise, we go straight to the target.
+            if n_features_before > 400:
+                n_features_after = n_features_before // 2
+            else:
+                n_features_after = TARGET_FEATURES
+            
+            # Ensure we don't go below the target in an intermediate step.
+            if n_features_after < TARGET_FEATURES:
+                n_features_after = TARGET_FEATURES
 
+            # Ensure we are making progress and don't get stuck in an infinite loop.
+            if n_features_after >= n_features_before:
+                logger.warning(f"Feature reduction stopped as it's not reducing features anymore. Current features: {n_features_before}")
+                break
+
+            logger.info(f"Reducing features from {n_features_before} to {n_features_after}...")
+            # The last value of filtered_feature_names will be kept, containing the final feature set.
+            X_train_processed, filtered_feature_names = get_filtered_features(X_train_processed, y_train_log, n_features_after_filter=n_features_after)
+            logger.info(f"Number of features after filtering: {X_train_processed.shape[1]}")
         
         rf_estimator = RandomForestRegressor(
             n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE, n_jobs=-1
@@ -399,7 +422,7 @@ def run_feature_selection(
         apply_pca_img_transform=should_apply_pca,
         apply_scale_transform=apply_scale_transform,
         include_count=INCLUDE_COUNT,
-        include_location_features=INCLUDE_LOCATION_FEATURES,
+        include_location_features=include_location_features,
     )
 
     img_subsets = [
@@ -418,7 +441,7 @@ def run_feature_selection(
         "n_pca_components": n_pca_components if should_apply_pca else None,
         "apply_scale_transform": apply_scale_transform,
         "include_count": INCLUDE_COUNT,
-        "include_location_features": INCLUDE_LOCATION_FEATURES,
+        "include_location_features": include_location_features,
         "n_estimators": N_ESTIMATORS,
         "random_state": RANDOM_STATE,
         **({"threshold": threshold} if method == "rf" else {}),
@@ -483,10 +506,20 @@ if __name__ == "__main__":
     # )
 
     run_feature_selection(
-        method="rfecv",
+        method="rf",
         output_dir=OUTPUT_DIR,
-        feature_subset="all",
+        feature_subset="base",
+        n_features=110,
+        apply_scale_transform=False,
+        include_location_features=True,
+        #n_pca_components=0.80,
+        #rfe_step_size=0.1,
     )
+    # run_feature_selection(
+    #     method="rfecv",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="all",
+    # )
 
     # run_feature_selection(
     #     method="rfecv",

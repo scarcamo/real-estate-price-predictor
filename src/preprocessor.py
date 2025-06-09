@@ -127,6 +127,7 @@ def create_data_transformer_pipeline(
     apply_scaling_and_transform=False,
     apply_pca=True,
     n_pca_components=N_PCA_COMPONENTS,
+    include_location_features=True,
 ):
     """
     Pipeline that handles all data preprocessing:

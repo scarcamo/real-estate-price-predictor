@@ -4,8 +4,6 @@ feature_sets:
 
 models_to_run:
   - "LightGBM"
-  - "XGBoost"
-  - "RandomForest"
 
 
 feature_sets_dir: "feature_sets"
@@ -21,7 +19,6 @@ optuna:
   n_trials: 100
   scoring_metric: 
     - "mape"
-    - "rmse"
   direction: "minimize"
   db_file: "tuning.db"
 
