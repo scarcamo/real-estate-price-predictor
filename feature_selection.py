@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.feature_selection import RFE, RFECV, SelectFromModel
+from sklearn.linear_model import LassoCV, ElasticNetCV
 from sklearn.model_selection import KFold
 
 from src.config import load_config
@@ -70,6 +71,8 @@ def get_feature_subsets(X_data):
     pano_cols = [col for col in cols if "pano_" in col]
 
     base_cols = [col for col in cols if col not in img_cols + poi_cols + pano_cols]
+    # remove rooms_number from base_cols
+    base_cols = [col for col in base_cols if col != "rooms_number"]
 
     return {
         "all": cols.tolist(),
@@ -94,17 +97,22 @@ def get_output_filename(method, feature_subset, **kwargs):
     """
     filename_parts = [method, feature_subset]
 
-    if method == "rf":
-        threshold = kwargs.get("threshold", "median")
-        filename_parts.append(f"thresh_{str(threshold).replace('.', 'p')}")
-    elif method == "rfe" or method == "rfecv" or method == "permutation_importance":
+    if kwargs.get("n_features"):
         n_features = kwargs.get("n_features")
         if n_features:
             filename_parts.append(f"nfeat_{n_features}")
+
+    if method == "rf":
+        threshold = kwargs.get("threshold", "median")
+        filename_parts.append(f"thresh_{str(threshold).replace('.', 'p')}")
+
     elif method == "lasso":
         alpha_lasso = kwargs.get("alpha_lasso")
         if alpha_lasso is not None:
             filename_parts.append(f"alpha_{str(alpha_lasso).replace('.', 'p')}")
+    elif method == "elasticnet":
+        # For ElasticNetCV, alpha is determined automatically
+        filename_parts.append("cv")
 
     apply_pca_img_transform = kwargs.get("apply_pca_img_transform", APPLY_PCA_IMG_TRANSFORM)
     apply_scale_transform = kwargs.get("apply_scale_transform", APPLY_SCALE_TRANSFORM)
@@ -134,34 +142,81 @@ def get_output_filename(method, feature_subset, **kwargs):
 
     return "_".join(filename_parts) + ".json"
 
-def get_filtered_features(X_train_processed, y_train, n_features_after_filter=200):
-    print(f"Filter features from {X_train_processed.shape[1]} to {n_features_after_filter}")
-
-    filter_estimator = RandomForestRegressor(
-    n_estimators=N_ESTIMATORS, # Using 100 is fast and effective
-    random_state=RANDOM_STATE,
-    n_jobs=-1
-    )
-
-    filter_selector = SelectFromModel(
-    filter_estimator,
-    max_features=n_features_after_filter,
-    threshold=-np.inf
-    )
-    y_train_log = np.log1p(y_train)
-    filter_selector.fit(X_train_processed, y_train_log)
-    X_train_filtered_np = filter_selector.transform(X_train_processed)
-    filtered_feature_names = X_train_processed.columns[filter_selector.get_support()].tolist()
+def filter_image_features_with_lasso(X_train_processed, y_train, alpha_range=None):
+    """
+    Filter image features using LassoCV, return filtered dataset with tabular + selected image features.
     
-    # Convert back to DataFrame to preserve column names
-    X_train_filtered = pd.DataFrame(
-        X_train_filtered_np, 
-        columns=filtered_feature_names, 
-        index=X_train_processed.index
+    Parameters:
+    -----------
+    X_train_processed : pd.DataFrame
+        Processed training data
+    y_train : array-like
+        Target variable
+    alpha_range : array-like, optional
+        Range of alpha values for LassoCV
+    
+    Returns:
+    --------
+    X_filtered : pd.DataFrame
+        Dataset with tabular features + selected image features
+    selected_img_features : list
+        List of selected image feature names
+    """
+    # Identify image columns
+    img_substrings = ["img_", "interior_", "exterior_", "vector_", "feature_", "pca_"]
+    img_cols = [col for col in X_train_processed.columns if any([sub in col for sub in img_substrings])]
+    
+    # Identify non-image (tabular) columns
+    tabular_cols = [col for col in X_train_processed.columns if col not in img_cols]
+    
+    if not img_cols:
+        print("No image features found - returning original dataset")
+        return X_train_processed, []
+    
+    print(f"Found {len(img_cols)} image features and {len(tabular_cols)} tabular features")
+    print("Applying LassoCV to filter image features...")
+    
+    # Extract image features for Lasso selection
+    X_img_features = X_train_processed[img_cols]
+    
+    # Scale ONLY the image features for better Lasso convergence
+    from sklearn.preprocessing import StandardScaler
+    scaler = StandardScaler()
+    X_img_features_scaled = scaler.fit_transform(X_img_features)
+    
+    # Default alpha range if not provided
+    if alpha_range is None:
+        alpha_range = np.logspace(-4, 1, 100)
+    
+    # Apply LassoCV to scaled image features only
+    lasso_cv = LassoCV(
+        alphas=alpha_range,
+        cv=5,
+        random_state=RANDOM_STATE,
+        n_jobs=-1,
+        max_iter=20000,
+        tol=1e-4
     )
+    
+    y_train_log = np.log(y_train)
+    lasso_cv.fit(X_img_features_scaled, y_train_log)
+    
+    # Get selected image features (non-zero coefficients)
+    selected_mask = lasso_cv.coef_ != 0
+    selected_img_features = [col for col, selected in zip(img_cols, selected_mask) if selected]
+    
+    print(f"LassoCV selected {len(selected_img_features)} image features out of {len(img_cols)}")
+    print(f"Best alpha: {lasso_cv.alpha_}")
+    
+    # Combine tabular features with selected image features
+    final_cols = tabular_cols + selected_img_features
+    X_filtered = X_train_processed[final_cols]
+    
+    print(f"Final dataset shape: {X_filtered.shape} (tabular: {len(tabular_cols)}, selected images: {len(selected_img_features)})")
+    
+    return X_filtered, selected_img_features
 
-    print(f"Filtered {len(filtered_feature_names)} features from {X_train_processed.shape[1]} to {n_features_after_filter}")
-    return X_train_filtered, filtered_feature_names
+
 
 def run_feature_selection(
     method="rf",
@@ -175,6 +230,7 @@ def run_feature_selection(
     n_pca_components=None,
     rfe_step_size=None,
     include_location_features=None,
+    alpha_range=None,
 ):
     # Use config defaults if parameters are not provided
     if apply_scale_transform is None:
@@ -202,7 +258,7 @@ def run_feature_selection(
     print(f"Feature Selection: y_train shape: {y_train.shape}")
 
     y_train = y_train.values.ravel()
-    y_train_log = np.log(y_train)
+    y_train_log = np.log(y_train)  # Use log1p for better numerical stability
 
     feature_sets = get_feature_subsets(X_train_full)
     if feature_subset not in feature_sets:
@@ -211,15 +267,24 @@ def run_feature_selection(
         )
 
     cols_to_use = feature_sets[feature_subset]
-    X_train = X_train_full[cols_to_use].copy()
-    X_test = X_test_full[cols_to_use].copy()
-
-    print(
-        f"Using feature subset '{feature_subset}'. X_train shape for selection: {X_train.shape}"
-    )
-
+    
     district_col_name = "district"
     outlier_col_name = "outlier"
+    
+    # Add district temporarily for preprocessing if not already in subset
+    cols_with_district = cols_to_use.copy()
+    district_added_temporarily = False
+    if district_col_name in X_train_full.columns and district_col_name not in cols_to_use:
+        cols_with_district.append(district_col_name)
+        district_added_temporarily = True
+        print(f"Adding '{district_col_name}' temporarily for grouped preprocessing")
+    
+    X_train = X_train_full[cols_with_district].copy()
+    X_test = X_test_full[cols_with_district].copy()
+
+    print(
+        f"Using feature subset '{feature_subset}'. X_train shape for preprocessing: {X_train.shape}"
+    )
 
     # Identify image columns that are present in the current subset
     img_subsets = [
@@ -292,9 +357,18 @@ def run_feature_selection(
 
     try:
         processed_feature_names = data_transformer.get_feature_names_out()
-        X_train_processed = pd.DataFrame(
+        X_train_processed_full = pd.DataFrame(
             X_train_processed_np, columns=processed_feature_names, index=X_train.index
         )
+
+        # Remove district column from processed features if it was added temporarily
+        if district_added_temporarily:
+            district_features = [f for f in processed_feature_names if district_col_name in f]
+            features_to_keep = [f for f in processed_feature_names if f not in district_features]
+            X_train_processed = X_train_processed_full[features_to_keep]
+            print(f"Removed {len(district_features)} district-related features from processed data")
+        else:
+            X_train_processed = X_train_processed_full
 
         X_test_processed = pd.DataFrame(
             X_test_processed_np, columns=processed_feature_names, index=X_test.index
@@ -305,7 +379,7 @@ def run_feature_selection(
         )
         print(
             "Example processed feature names:",
-            processed_feature_names[:10].tolist(),
+            list(X_train_processed.columns)[:10],
             "...",
         )
     except Exception as e:
@@ -348,43 +422,29 @@ def run_feature_selection(
         selected_features_mask = selector.get_support()
 
     elif method == "rfecv":
-        TARGET_FEATURES = 200
-        # Reduce features in stages if there are more features than the target
-        while X_train_processed.shape[1] > TARGET_FEATURES:
-            n_features_before = X_train_processed.shape[1]
-            
-            # Determine the number of features for the next stage.
-            # If we have a lot more features than the target (e.g. > 400), we halve them.
-            # Otherwise, we go straight to the target.
-            if n_features_before > 400:
-                n_features_after = n_features_before // 2
-            else:
-                n_features_after = TARGET_FEATURES
-            
-            # Ensure we don't go below the target in an intermediate step.
-            if n_features_after < TARGET_FEATURES:
-                n_features_after = TARGET_FEATURES
-
-            # Ensure we are making progress and don't get stuck in an infinite loop.
-            if n_features_after >= n_features_before:
-                logger.warning(f"Feature reduction stopped as it's not reducing features anymore. Current features: {n_features_before}")
-                break
-
-            logger.info(f"Reducing features from {n_features_before} to {n_features_after}...")
-            # The last value of filtered_feature_names will be kept, containing the final feature set.
-            X_train_processed, filtered_feature_names = get_filtered_features(X_train_processed, y_train_log, n_features_after_filter=n_features_after)
-            logger.info(f"Number of features after filtering: {X_train_processed.shape[1]}")
+        # Pre-filter image features with Lasso if they exist
+        if img_cols_in_subset:
+            print("Pre-filtering image features with LassoCV before RFECV...")
+            X_train_processed, selected_img_features = filter_image_features_with_lasso(
+                X_train_processed, y_train, alpha_range=alpha_range
+            )
+            print(f"Proceeding with RFECV on {X_train_processed.shape[1]} features (including {len(selected_img_features)} selected image features)")
         
         rf_estimator = RandomForestRegressor(
             n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE, n_jobs=-1
         )
+        
+        # min select 20% of the features
+        min_features_to_select = int(0.2 * X_train_processed.shape[1])
+        print(f"Min features to select: {min_features_to_select}")
+
         cv_strategy = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
         selector = RFECV(
             estimator=rf_estimator,
             step=rfe_step_size,
             cv=cv_strategy,
-            scoring="neg_mean_squared_error",
-            min_features_to_select=1,
+            scoring="neg_mean_absolute_percentage_error", # mape
+            min_features_to_select=min_features_to_select, # equal to pai_poi_pano
             n_jobs=-1,
             verbose=1,
         )
@@ -394,6 +454,39 @@ def run_feature_selection(
         n_features = selector.n_features_
         print(f"\nOptimal number of features found: {n_features}")
         selected_features_mask = selector.get_support()
+
+    elif method == "elasticnet":
+        # ElasticNetCV for entire dataset
+        if alpha_range is None:
+            alpha_range = np.logspace(-4, 1, 100)
+        
+        l1_ratio_range = [0.1, 0.5, 0.7, 0.9, 0.95, 0.99] 
+        
+        # Standardize target variable only for ElasticNet for better convergence
+        y_train_scaled = (y_train_log - np.mean(y_train_log)) / np.std(y_train_log)
+        
+        elasticnet_cv = ElasticNetCV(
+            alphas=alpha_range,
+            l1_ratio=l1_ratio_range,
+            cv=5,
+            random_state=RANDOM_STATE,
+            n_jobs=-1,
+            max_iter=20000,
+            tol=1e-4,
+
+        )
+        
+        elasticnet_cv.fit(X_train_processed, y_train_scaled)
+        
+        # Get selected features (non-zero coefficients)
+        selected_features_mask = elasticnet_cv.coef_ != 0
+        n_features = np.sum(selected_features_mask)
+        
+        print(f"ElasticNetCV selected {n_features} features out of {X_train_processed.shape[1]}")
+        print(f"Best alpha: {elasticnet_cv.alpha_}")
+        print(f"Best l1_ratio: {elasticnet_cv.l1_ratio_}")
+        
+        selector = elasticnet_cv
 
     else:
         raise ValueError(f"Unknown feature selection method: {method}")
@@ -445,6 +538,8 @@ def run_feature_selection(
         "random_state": RANDOM_STATE,
         **({"threshold": threshold} if method == "rf" else {}),
         **({"rfe_step_size": rfe_step_size} if method in ["rfe", "rfecv"] else {}),
+        **({"alpha": getattr(selector, 'alpha_', None)} if method == "elasticnet" else {}),
+        **({"l1_ratio": getattr(selector, 'l1_ratio_', None)} if method == "elasticnet" else {}),
     }
 
 
@@ -468,6 +563,9 @@ def run_feature_selection(
     return output_filename
 
 
+
+
+
 def make_features():
     """
     Export predefined feature sets
@@ -485,49 +583,59 @@ def make_features():
 
 if __name__ == "__main__":
 
-    # run_feature_selection(
-    #     method="rfecv",
-    #     output_dir=OUTPUT_DIR,
-    #     feature_subset="base_img",
-    # )
-
-
-    # run_feature_selection(
-    #     method="rfecv",
-    #     output_dir=OUTPUT_DIR,
-    #     feature_subset="base",
-    # )
-
-    # run_feature_selection(
-    #     method="rfecv",
-    #     output_dir=OUTPUT_DIR,
-    #     feature_subset="base_pano",
-    # )
+    run_feature_selection(
+        method="elasticnet",
+        output_dir=OUTPUT_DIR,
+        feature_subset="all",
+        apply_scale_transform=True,
+        apply_pca_img_transform=True,
+        include_location_features=True,
+        n_pca_components=0.80,
+    )
 
     run_feature_selection(
-        method="rf",
+        method="elasticnet",
         output_dir=OUTPUT_DIR,
-        feature_subset="base",
-        n_features=110,
+        feature_subset="all",
+        apply_scale_transform=True,
+        apply_pca_img_transform=False,
+        include_location_features=True,
+    )
+
+    run_feature_selection(
+        method="elasticnet",
+        output_dir=OUTPUT_DIR,
+        feature_subset="img_cols",
+        apply_scale_transform=True,
+        apply_pca_img_transform=False,
+    )
+
+    run_feature_selection(
+        method="elasticnet",
+        output_dir=OUTPUT_DIR,
+        feature_subset="img_cols",
+        apply_scale_transform=True,
+        apply_pca_img_transform=True,
+        n_pca_components=0.80,
+    )
+
+    run_feature_selection(
+        method="rfecv",
+        output_dir=OUTPUT_DIR,
+        feature_subset="all",
+        apply_scale_transform=False,
+        apply_pca_img_transform=False,
+        include_location_features=True,
+        rfe_step_size=0.08
+    )
+
+    run_feature_selection(
+        method="rfecv",
+        output_dir=OUTPUT_DIR,
+        feature_subset="all",
         apply_scale_transform=False,
         include_location_features=True,
-        #n_pca_components=0.80,
-        #rfe_step_size=0.1,
+        apply_pca_img_transform=True,
+        n_pca_components=0.80,
+        rfe_step_size=0.08
     )
-    # run_feature_selection(
-    #     method="rfecv",
-    #     output_dir=OUTPUT_DIR,
-    #     feature_subset="all",
-    # )
-
-    # run_feature_selection(
-    #     method="rfecv",
-    #     output_dir=OUTPUT_DIR,
-    #     feature_subset="base_poi",
-    # )
-
-    # run_feature_selection(
-    #     method="rfecv",
-    #     output_dir=OUTPUT_DIR,
-    #     feature_subset="base_poi_pano",
-    # )
