@@ -35,7 +35,6 @@
         "district_ochota",
         "district_praga_polnoc",
         "district_praga_poludnie",
-        "district_rembertow",
         "district_srodmiescie",
         "district_targowek",
         "district_ursus",
@@ -122,7 +121,7 @@
     "metadata": {
         "method": "rfecv",
         "feature_subset_used": "base",
-        "n_features_selected": 118,
+        "n_features_selected": 117,
         "apply_pca_img_transform": false,
         "n_pca_components": null,
         "apply_scale_transform": false,
