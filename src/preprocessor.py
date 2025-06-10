@@ -21,6 +21,7 @@ config = load_config()
 
 N_PCA_COMPONENTS = config.get("N_PCA_COMPONENTS")
 
+
 class GroupedMedianImputer(BaseEstimator, TransformerMixin):
     """
     Imputes missing values in specified numeric columns using the median of each group,
@@ -156,7 +157,7 @@ def create_data_transformer_pipeline(
             ]
         )
     numeric_pipeline = Pipeline(numeric_transformer_steps)
-
+    
     categorical_pipeline = Pipeline(
         [
             (
@@ -166,7 +167,10 @@ def create_data_transformer_pipeline(
             (
                 "one_hot_encoder",
                 OneHotEncoder(
-                    handle_unknown="ignore", sparse_output=False, min_frequency=0.01
+                    handle_unknown="ignore",
+                    sparse_output=False,
+                    min_frequency=0.01,
+                    drop=None,
                 ),
             ),
         ]
@@ -175,18 +179,18 @@ def create_data_transformer_pipeline(
     # Image features pipeline
 
     image_pipeline_steps = [
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-        ]
+        ("imputer", SimpleImputer(strategy="constant", fill_value=0)),
+        ("scaler", StandardScaler()),
+    ]
 
     if apply_pca:
-        logging.debug("Applying PCA to image features with n_components = %d", N_PCA_COMPONENTS)
+        logging.debug(
+            "Applying PCA to image features with n_components = %d", N_PCA_COMPONENTS
+        )
         n_pca_components = N_PCA_COMPONENTS
         image_pipeline_steps.append(("pca", PCA(n_components=n_pca_components)))
 
-    image_pipeline = Pipeline(
-       image_pipeline_steps
-    )
+    image_pipeline = Pipeline(image_pipeline_steps)
 
     # Combine all transformers into a list for ColumnTransformer
     transformers = [
@@ -205,9 +209,11 @@ def create_data_transformer_pipeline(
     )
 
     # The full preprocessing pipeline
-    data_transformer_pipeline = Pipeline([
-        ("grouped_imputation", grouped_imputer),
-        ("column_transformations", feature_processor_ct),
-    ])
+    data_transformer_pipeline = Pipeline(
+        [
+            ("grouped_imputation", grouped_imputer),
+            ("column_transformations", feature_processor_ct),
+        ]
+    )
 
     return data_transformer_pipeline
