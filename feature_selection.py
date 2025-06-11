@@ -163,7 +163,7 @@ def filter_image_features_with_lasso(X_train_processed, y_train, alpha_range=Non
         List of selected image feature names
     """
     # Identify image columns
-    img_substrings = ["img_", "interior_", "exterior_", "vector_", "feature_", "pca_"]
+    img_substrings = ["img_", "interior_", "exterior_", "vector_", "feature_", "pca"]
     img_cols = [col for col in X_train_processed.columns if any([sub in col for sub in img_substrings])]
     
     # Identify non-image (tabular) columns
@@ -231,6 +231,7 @@ def run_feature_selection(
     rfe_step_size=None,
     include_location_features=None,
     alpha_range=None,
+    min_features_to_select=None,
 ):
     # Use config defaults if parameters are not provided
     if apply_scale_transform is None:
@@ -289,10 +290,12 @@ def run_feature_selection(
     # Identify image columns that are present in the current subset
     img_subsets = [
         "all",
+        "img_cols",
         "base_img",
         "base_poi_img",
         "base_pano_img",
         "base_poi_pano_img",
+        "poi_pano_img"
     ]
 
     if feature_subset in img_subsets:
@@ -434,8 +437,9 @@ def run_feature_selection(
             n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE, n_jobs=-1
         )
         
-        # min select 20% of the features
-        min_features_to_select = int(0.2 * X_train_processed.shape[1])
+        # min select 10% of the features
+        if min_features_to_select is None:
+            min_features_to_select = int(0.2 * X_train_processed.shape[1])
         print(f"Min features to select: {min_features_to_select}")
 
         cv_strategy = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
@@ -583,59 +587,78 @@ def make_features():
 
 if __name__ == "__main__":
 
-    run_feature_selection(
-        method="elasticnet",
-        output_dir=OUTPUT_DIR,
-        feature_subset="all",
-        apply_scale_transform=True,
-        apply_pca_img_transform=True,
-        include_location_features=True,
-        n_pca_components=0.80,
-    )
+    # run_feature_selection(
+    #     method="elasticnet",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="all",
+    #     apply_scale_transform=True,
+    #     apply_pca_img_transform=True,
+    #     include_location_features=True,
+    #     n_pca_components=0.80,
+    # )
 
-    run_feature_selection(
-        method="elasticnet",
-        output_dir=OUTPUT_DIR,
-        feature_subset="all",
-        apply_scale_transform=True,
-        apply_pca_img_transform=False,
-        include_location_features=True,
-    )
+    # run_feature_selection(
+    #     method="elasticnet",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="all",
+    #     apply_scale_transform=True,
+    #     apply_pca_img_transform=False,
+    #     include_location_features=True,
+    # )
 
-    run_feature_selection(
-        method="elasticnet",
-        output_dir=OUTPUT_DIR,
-        feature_subset="img_cols",
-        apply_scale_transform=True,
-        apply_pca_img_transform=False,
-    )
+    # run_feature_selection(
+    #     method="elasticnet",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="img_cols",
+    #     apply_scale_transform=True,
+    #     apply_pca_img_transform=False,
+    # )
 
-    run_feature_selection(
-        method="elasticnet",
-        output_dir=OUTPUT_DIR,
-        feature_subset="img_cols",
-        apply_scale_transform=True,
-        apply_pca_img_transform=True,
-        n_pca_components=0.80,
-    )
+    # run_feature_selection(
+    #     method="elasticnet",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="img_cols",
+    #     apply_scale_transform=True,
+    #     apply_pca_img_transform=True,
+    #     n_pca_components=0.80,
+    # )
+
+    # run_feature_selection(
+    #     method="rfecv",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="all",
+    #     apply_scale_transform=False,
+    #     apply_pca_img_transform=False,
+    #     include_location_features=True,
+    #     rfe_step_size=0.08
+    # )
+
+    # run_feature_selection(
+    #     method="rfecv",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="all",
+    #     apply_scale_transform=False,
+    #     include_location_features=True,
+    #     apply_pca_img_transform=True,
+    #     n_pca_components=0.80,
+    #     rfe_step_size=0.08
+    # )
 
     run_feature_selection(
         method="rfecv",
         output_dir=OUTPUT_DIR,
-        feature_subset="all",
+        feature_subset="img_cols",
         apply_scale_transform=False,
-        apply_pca_img_transform=False,
-        include_location_features=True,
-        rfe_step_size=0.08
-    )
-
-    run_feature_selection(
-        method="rfecv",
-        output_dir=OUTPUT_DIR,
-        feature_subset="all",
-        apply_scale_transform=False,
-        include_location_features=True,
         apply_pca_img_transform=True,
         n_pca_components=0.80,
-        rfe_step_size=0.08
+        rfe_step_size=0.1
     )
+
+    # run_feature_selection(
+    #     method="rfecv",
+    #     output_dir=OUTPUT_DIR,
+    #     feature_subset="img_cols",
+    #     apply_scale_transform=False,
+    #     apply_pca_img_transform=False,
+    #     rfe_step_size=0.1
+    # )
