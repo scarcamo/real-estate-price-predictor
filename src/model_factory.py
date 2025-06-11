@@ -54,10 +54,10 @@ def get_model_params(
 
     if model_name == "RandomForest":
         params[f"{model_prefix}n_estimators"] = trial.suggest_int(
-            f"{model_prefix}n_estimators", 400, 1500, step=100
+            f"{model_prefix}n_estimators", 400, 2000, step=100
         )
         params[f"{model_prefix}max_depth"] = trial.suggest_int(
-            f"{model_prefix}max_depth", 3, 30
+            f"{model_prefix}max_depth", 3, 50
         )
         params[f"{model_prefix}min_samples_split"] = trial.suggest_int(
             f"{model_prefix}min_samples_split", 2, 50
@@ -76,13 +76,13 @@ def get_model_params(
         params[f"{model_prefix}max_depth"] = trial.suggest_int(
             f"{model_prefix}max_depth",
             3,
-            30,
+            50,
         )
         params[f"{model_prefix}learning_rate"] = trial.suggest_float(
             f"{model_prefix}learning_rate", 0.01, 0.3, log=True
         )
         params[f"{model_prefix}n_estimators"] = trial.suggest_int(
-            f"{model_prefix}n_estimators", 100, 2000, step=100
+            f"{model_prefix}n_estimators", 100, 2500, step=100
         )
         params[f"{model_prefix}min_child_weight"] = trial.suggest_int(
             f"{model_prefix}min_child_weight",
@@ -101,29 +101,29 @@ def get_model_params(
             5.0,
         )
         params[f"{model_prefix}reg_lambda"] = trial.suggest_float(
-            f"{model_prefix}reg_lambda", 1e-2, 200.0, log=True
+            f"{model_prefix}reg_lambda", 1e-8, 200.0, log=True
         )
         params[f"{model_prefix}reg_alpha"] = trial.suggest_float(
-            f"{model_prefix}reg_alpha", 1e-2, 200.0, log=True
+            f"{model_prefix}reg_alpha", 1e-8, 200.0, log=True
         )
 
     elif model_name == "LightGBM":
         params[f"{model_prefix}objective"] = trial.suggest_categorical(
             f"{model_prefix}objective",
-            ["regression_l1", "regression_l2", "huber"],
+            ["regression_l2", "huber"],
         )
 
         params[f"{model_prefix}learning_rate"] = trial.suggest_float(
             f"{model_prefix}learning_rate", 0.01, 0.3, log=True
         )
         params[f"{model_prefix}n_estimators"] = trial.suggest_int(
-            f"{model_prefix}n_estimators", 700, 2500, step=100
+            f"{model_prefix}n_estimators", 700, 3000, step=100
         )
         params[f"{model_prefix}num_leaves"] = trial.suggest_int(
-            f"{model_prefix}num_leaves", 20, 200
+            f"{model_prefix}num_leaves", 20, 300
         )
         params[f"{model_prefix}max_depth"] = trial.suggest_int(
-            f"{model_prefix}max_depth", 3, 40
+            f"{model_prefix}max_depth", 3, 50
         )
         params[f"{model_prefix}min_child_samples"] = trial.suggest_int(
             f"{model_prefix}min_child_samples", 5, 100
@@ -135,10 +135,10 @@ def get_model_params(
             f"{model_prefix}colsample_bytree", 0.5, 1.0
         )
         params[f"{model_prefix}reg_alpha"] = trial.suggest_float(
-            f"{model_prefix}reg_alpha", 1e-2, 200.0, log=True
+            f"{model_prefix}reg_alpha", 1e-8, 200.0, log=True
         )
         params[f"{model_prefix}reg_lambda"] = trial.suggest_float(
-            f"{model_prefix}reg_lambda", 1e-2, 200.0, log=True
+            f"{model_prefix}reg_lambda", 1e-8, 200.0, log=True
         )
 
     return params
