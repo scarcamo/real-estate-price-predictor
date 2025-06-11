@@ -1,13 +1,16 @@
 experiment_version: "v1"
 
 feature_sets:
-  - "rfecv_base_nfeat_118_nonpca_count_loc.json"
-  - "rfecv_all_nfeat_60_pca_count.json"
-  - "rfecv_all_nfeat_80_nonpca_count.json"
+  - "rfecv_base_nfeat_117_nonpca_count_loc.json"
   - "rfecv_base_poi_pano_nfeat_160_nonpca_count_loc.json"
+  - "rfecv_all_nfeat_152_nonpca_count_loc.json"
+  - "comb_all_nfeat_201_pca_count_loc.json"
+
+
 
 models_to_run:
-  - "LightGBM"
+  - "XGBoost"
+  - "RandomForest"
 
 feature_sets_dir: "feature_sets"
 optuna_dir: "optuna_studies"
