@@ -158,16 +158,29 @@ class ModelTrainer:
 
         # Setup and run Optuna study
         study = self._setup_optuna_study(model_name)
+
+        current_completed_trials = len(study.trials)
+        logging.info(f"DEBUG: Optuna study '{study.study_name}' loaded with {current_completed_trials} existing trials.")
+
+        total_desired_trials = self.config['optuna']['n_trials']
+
+        trials_to_run = max(0, total_desired_trials - current_completed_trials)
+        logging.info(f"DEBUG: Study already has {current_completed_trials} trials. Aiming for {total_desired_trials} total trials. Will run {trials_to_run} new trials.")
+
         mlflow_callback = self._setup_mlflow_callback()
         
-        study.optimize(
-            objective,
-            n_trials=self.config["optuna"]["n_trials"],
-            # callbacks=[mlflow_callback],
-            n_jobs=1,
-            gc_after_trial=True,
-        )
-        
+
+        if trials_to_run > 0:
+            study.optimize(
+                objective,
+                n_trials=trials_to_run,
+                # callbacks=[mlflow_callback],
+                n_jobs=1,
+                gc_after_trial=True,
+            )
+        else:
+            logging.info(f"DEBUG: Study already has {current_completed_trials} trials, which meets or exceeds the target of {total_desired_trials}. No new trials will be run in this call.")
+
         tuning_duration = time.time() - start_time
         logging.info(f"Optuna hyperparameter tuning for {model_name} finished in {tuning_duration:.2f} seconds.")
 
@@ -256,6 +269,7 @@ class ModelTrainer:
             study_name=study_name,
             direction=self.config["optuna"]["direction"],
             load_if_exists=True,
+            sampler=optuna.samplers.TPESampler(seed=self.config['RANDOM_STATE']),
             pruner=optuna.pruners.MedianPruner(),
         )
 
