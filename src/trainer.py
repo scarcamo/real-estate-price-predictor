@@ -175,7 +175,7 @@ class ModelTrainer:
                 objective,
                 n_trials=trials_to_run,
                 # callbacks=[mlflow_callback],
-                n_jobs=1,
+                n_jobs=-1,
                 gc_after_trial=True,
             )
         else:
@@ -322,6 +322,13 @@ class ModelTrainer:
         # Train final model
         final_model_instance = model_config["model"]
         best_model_pipeline = build_model_pipeline(final_model_instance)
+        
+        final_params = best_params.copy()
+        final_params[f"{self.model_prefix}n_jobs"] = -1
+        logging.info("Set model n_jobs to -1 for final training.")
+
+        best_model_pipeline.set_params(**final_params)
+        
         best_model_pipeline.set_params(**best_params)
         best_model_pipeline.fit(X_train_selected_final, self.data_manager.get_log_transformed_target())
 
