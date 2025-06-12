@@ -1,10 +1,11 @@
 experiment_version: "v1"
 
 feature_sets:
-  - "rfecv_base_nfeat_117_nonpca_count_loc.json"
   - "rfecv_base_poi_pano_nfeat_160_nonpca_count_loc.json"
   - "rfecv_all_nfeat_152_nonpca_count_loc.json"
   - "comb_all_nfeat_201_pca_count_loc.json"
+  - "elasticnet_all_nfeat_296_pca_scaled_count_loc.json"
+  - "rfecv_base_nfeat_117_nonpca_count_loc.json"
 
 
 
