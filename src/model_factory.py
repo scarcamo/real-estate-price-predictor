@@ -18,7 +18,7 @@ def get_model_configs(random_state: int, metric: str = "mape") -> Dict[str, Dict
                 random_state=random_state,
                 objective="regression",
                 metric=metric,
-                n_jobs=-1,
+                n_jobs=1,
                 verbose=-1,
             ),
         },
@@ -27,7 +27,7 @@ def get_model_configs(random_state: int, metric: str = "mape") -> Dict[str, Dict
                 random_state=random_state,
                 tree_method="hist",
                 objective="reg:squarederror",
-                n_jobs=-1,
+                n_jobs=1,
             ),
         },
         "XGBoostQuantile": {
@@ -36,7 +36,7 @@ def get_model_configs(random_state: int, metric: str = "mape") -> Dict[str, Dict
                 tree_method="hist",
                 objective="reg:quantileerror",
                 quantile_alpha=0.5,
-                n_jobs=-1,
+                n_jobs=1,
             ),
         },
         "RandomForest": {

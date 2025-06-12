@@ -141,14 +141,9 @@ def clean_data():
     city_center = (52.2318543, 21.0028622)  # for Warsaw
 
     # 1 degree of latitude/longitude ≈ 111 km
-    df["distance_to_center_km"] = df.apply(
-        lambda row: np.sqrt(
-            (row["latitude"] - city_center[0]) ** 2
-            + (row["longitude"] - city_center[1]) ** 2
-        )
-        * 111,
-        axis=1,
-    )
+    lat_diff = df["latitude"] - city_center[0]
+    lon_diff = df["longitude"] - city_center[1]
+    df["distance_to_center_km"] = np.sqrt(lat_diff**2 + lon_diff**2) * 111
 
     df["room_size_m2"] = df["area_m2"] / df["rooms_number"].replace("MORE", 11).astype(
         float
