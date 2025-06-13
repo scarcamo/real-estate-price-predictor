@@ -150,69 +150,10 @@ The script generates multiple output formats in the `experiment_summaries/` dire
    - Complete run information including parameters
    - Summary statistics and experiment overview
 
-3. **`experiment_summary_YYYYMMDD_HHMMSS.xlsx`** (if openpyxl is installed):
-   - Multi-sheet Excel workbook
-   - Sheet 1: Best runs table
-   - Sheet 2: Model comparison statistics
-   - Sheet 3: Feature set comparison statistics
-
-### Console Output
-
-The script also provides real-time console output showing:
-- Progress of data collection
-- Summary statistics (total experiments, runs, models)
-- Top N best performing runs in a formatted table
-- Model performance comparison by algorithm
-
-### Example Console Output
-```
-================================================================================
-EXPERIMENT SUMMARY - TOP 15 BEST RUNS
-================================================================================
-Total experiments analyzed: 5
-Total completed runs: 120
-Best runs found: 20
-Unique models: 4
-Unique feature sets: 5
-
---------------------------------------------------------------------------------
-TOP PERFORMING RUNS:
---------------------------------------------------------------------------------
-model_name    feature_set                           test_score  train_score  test_mae  test_rmse
-LightGBM      rfecv_all_nfeat_44_pca_scaled.json       0.8945      0.9123    0.1234     0.1456
-XGBoost       rfecv_all_nfeat_44_pca_scaled.json       0.8932      0.9156    0.1245     0.1467
-...
-
---------------------------------------------------------------------------------
-MODEL PERFORMANCE SUMMARY:
---------------------------------------------------------------------------------
-              Runs  Mean_Score  Std_Score  Best_Score
-LightGBM         5      0.8823     0.0234      0.8945
-XGBoost          5      0.8798     0.0198      0.8932
-...
-```
-
-## Project Structure
-
-```
-thesis/
-├── src/
-│   ├── run_experiment.py    # Main experiment runner
-│   ├── config.py           # Configuration management
-│   ├── data_manager.py     # Data loading and preprocessing
-│   ├── model_factory.py    # Model configurations
-│   └── trainer.py          # Model training and evaluation
-├── feature_sets/           # Feature selection files
-├── config/                 # Configuration files
-├── experiment_summaries/   # Generated summary reports
-├── make_summary.py         # Summary generation script
-├── requirements.txt        # Python dependencies
-└── README.md              # This file
-```
 
 ## Workflow
 
-### Complete Workflow Example
+### Complete Workflow
 
 Here's the complete workflow from setup to analysis:
 
@@ -220,7 +161,7 @@ Here's the complete workflow from setup to analysis:
 # 1. Setup environment
 uv venv --python 3.12
 source .venv/bin/activate
-uv pip install mlflow scikit-learn lightgbm xgboost optuna pandas numpy matplotlib seaborn openpyxl
+uv sync
 
 # 2. Run experiments
 uv run src/run_experiment.py
@@ -232,63 +173,7 @@ mlflow ui
 uv run make_summary.py
 
 # 5. View results
-# - Console output for quick overview
 # - CSV file for spreadsheet analysis
-# - JSON file for programmatic access
-# - Excel file for detailed analysis with multiple sheets
+# - jupyter noteboook summary.ipynb
 ```
 
-## Troubleshooting
-
-### Common Issues
-
-1. **MLflow UI not accessible**: Ensure port 5000 is available or specify a different port
-2. **Missing feature sets**: Check that feature set files exist in the specified directory
-3. **Memory issues**: Reduce the number of trials in optuna configuration
-4. **Environment issues**: Ensure all dependencies are installed in the virtual environment
-5. **No best runs found**: Check that experiments have completed successfully and metrics are being logged
-
-### Summary Script Issues
-
-1. **No experiments found**: Ensure MLflow experiments have been run and completed
-2. **Missing metrics**: Check that the experiment logging includes the expected metric names
-3. **Excel export fails**: Install openpyxl with `uv pip install openpyxl`
-4. **Empty summary**: Verify that runs completed successfully (status='FINISHED')
-
-### Logs
-
-Check console output for detailed logging information. Logs include:
-- Configuration loading status
-- Data loading progress
-- Model training progress
-- Hyperparameter optimization progress
-- MLflow experiment and run creation
-- Error messages and stack traces
-
-## Advanced Usage
-
-### Custom Summary Metrics
-
-You can modify the `make_summary.py` script to use different optimization metrics by editing the `metrics_to_try` list in the `main()` function:
-
-```python
-# In make_summary.py, modify this line:
-metrics_to_try = ['test_score', 'cv_score', 'test_r2', 'cv_r2', 'test_mae']
-```
-
-### Custom MLflow URI
-
-If using a remote MLflow server, modify the script to specify the tracking URI:
-
-```python
-# Initialize with custom URI
-summarizer = MLflowSummarizer(mlflow_uri="http://your-mlflow-server:5000")
-```
-
-## Contributing
-
-1. Create feature branches for new functionality
-2. Ensure all dependencies are specified in requirements.txt
-3. Update this README for any new features or configuration options
-4. Test changes with a small subset of data before full runs
-5. Ensure summary script compatibility with any new metric names or logging patterns
