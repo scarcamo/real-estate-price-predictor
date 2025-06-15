@@ -8,8 +8,10 @@ feature_sets:
 
 
 models_to_run:
-  - "LightGBM"
-  
+  - "XGBoost"
+  - "RandomForest"
+  - "XGBoostQuantile"
+   
 feature_sets_dir: "feature_sets"
 optuna_dir: "optuna_studies"
 artifact_path: "models_and_artifacts"
