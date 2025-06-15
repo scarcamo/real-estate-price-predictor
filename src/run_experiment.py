@@ -91,8 +91,30 @@ def update_config_from_metadata(config: Dict[str, Any], metadata: Dict[str, Any]
         logging.warning("No metadata found in feature selection file. Using default configurations.")
         return
 
-    logging.info("Overriding configurations with values from feature selection metadata...")
+    logging.info("Checking feature selection metadata for configuration overrides...")
     
+    # Check if this is a new approach feature set
+    is_new_approach = metadata.get("images_handled_separately", False)
+    should_include_images = metadata.get("should_include_images", False)
+    
+    if is_new_approach:
+        logging.info("🆕 NEW APPROACH detected - using combined transformer with separate image handling")
+        logging.info(f"📸 Images will be {'INCLUDED' if should_include_images else 'EXCLUDED'}")
+        
+        if should_include_images:
+            # Log image processing method
+            if metadata.get("apply_umap_img_transform", False):
+                n_components = metadata.get("n_umap_components", 50)
+                logging.info(f"🔄 Image processing: UMAP with {n_components} components")
+            elif metadata.get("apply_pca_img_transform", False):
+                n_components = metadata.get("n_pca_components", 50)
+                logging.info(f"🔄 Image processing: PCA with {n_components} components")
+            else:
+                logging.info("🔄 Image processing: None (raw images)")
+    else:
+        logging.info("🔧 LEGACY APPROACH detected - using traditional transformer")
+    
+    # Update config with metadata values (for legacy compatibility)
     config_updates = {
         "apply_scale_transform": "apply_scale_transform",
         "apply_pca_img_transform": "apply_pca_img_transform", 
@@ -106,16 +128,19 @@ def update_config_from_metadata(config: Dict[str, Any], metadata: Dict[str, Any]
             original_value = config.get(config_key)
             config[config_key] = metadata[metadata_key]
             if original_value != config[config_key]:
-                logging.info(f"{config_key} overridden by metadata: {config[config_key]} (was {original_value})")
+                logging.info(f"🔧 {config_key} overridden by metadata: {config[config_key]} (was {original_value})")
 
     if config["RANDOM_STATE"] != metadata.get("random_state", config["RANDOM_STATE"]):
-        logging.info(f"Re-seeding with new random_state: {config['RANDOM_STATE']}")
+        logging.info(f"🎲 Re-seeding with new random_state: {config['RANDOM_STATE']}")
         np.random.seed(config["RANDOM_STATE"])
         random.seed(config["RANDOM_STATE"])
 
 def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str, scoring_metric: str) -> None:
     """Run experiment for a single feature set with a specific scoring metric"""
-    logging.info(f"\n=== Starting experiment for feature set: {feature_set} with scoring metric: {scoring_metric} ===")
+    logging.info(f"\n{'='*80}")
+    logging.info(f"🚀 Starting experiment for feature set: {feature_set}")
+    logging.info(f"📊 Scoring metric: {scoring_metric}")
+    logging.info(f"{'='*80}")
     
     # Get feature set name without .json extension for trainer
     feature_set_name = feature_set.replace(".json", "")
@@ -129,6 +154,9 @@ def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str, sco
         # Load and validate features
         selected_features_names, selected_features_metadata = load_and_validate_features(experiment_config, feature_set)
         
+        logging.info(f"📋 Loaded {len(selected_features_names)} selected features")
+        logging.info(f"📋 Feature subset used: {selected_features_metadata.get('feature_subset_used', 'unknown')}")
+        
         # Update configuration from metadata
         update_config_from_metadata(experiment_config, selected_features_metadata)
         
@@ -136,6 +164,7 @@ def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str, sco
         setup_experiment(experiment_config, feature_set, scoring_metric)
         
         # Initialize data manager and load data
+        logging.info("📁 Loading data...")
         data_manager = DataManager(experiment_config)
         data_manager.load_data()
         
@@ -154,8 +183,10 @@ def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str, sco
         }
         
         if not model_configs:
-            logging.warning(f"No valid models found in config['models_to_run']: {experiment_config['models_to_run']}")
+            logging.warning(f"⚠️ No valid models found in config['models_to_run']: {experiment_config['models_to_run']}")
             return
+        
+        logging.info(f"🤖 Training {len(model_configs)} models: {list(model_configs.keys())}")
         
         # Initialize trainer with feature set name
         trainer = ModelTrainer(experiment_config, data_manager, feature_set_name)
@@ -164,9 +195,25 @@ def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str, sco
         with mlflow.start_run(
             run_name=f"MainRun_{feature_set_name}_{scoring_metric}"
         ) as main_run:
-            logging.info(f"Main Run ID for {feature_set} with {scoring_metric}: {main_run.info.run_id}")
+            logging.info(f"📊 Main Run ID: {main_run.info.run_id}")
             mlflow.set_tag("feature_set_file", feature_set)
             mlflow.set_tag("scoring_metric", scoring_metric)
+            
+            # Add new approach tags
+            if selected_features_metadata:
+                is_new_approach = selected_features_metadata.get("images_handled_separately", False)
+                should_include_images = selected_features_metadata.get("should_include_images", False)
+                
+                mlflow.set_tag("approach_type", "new" if is_new_approach else "legacy")
+                mlflow.set_tag("includes_images", should_include_images)
+                
+                if should_include_images:
+                    if selected_features_metadata.get("apply_umap_img_transform", False):
+                        mlflow.set_tag("image_method", "umap")
+                    elif selected_features_metadata.get("apply_pca_img_transform", False):
+                        mlflow.set_tag("image_method", "pca")
+                    else:
+                        mlflow.set_tag("image_method", "none")
             
             # Log configuration parameters
             config_params = {
@@ -194,7 +241,8 @@ def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str, sco
             mlflow.log_param("feature_set", feature_set)
             
             # Train and evaluate each model
-            for model_name, model_specific_config in model_configs.items():
+            for model_idx, (model_name, model_specific_config) in enumerate(model_configs.items(), 1):
+                logging.info(f"\n🤖 Training model {model_idx}/{len(model_configs)}: {model_name}")
                 try:
                     trainer.train_evaluate_log(
                         model_name=model_name,
@@ -204,24 +252,29 @@ def run_experiment_for_feature_set(config: Dict[str, Any], feature_set: str, sco
                         parent_run_id=main_run.info.run_id,
                         feature_selection_metadata=selected_features_metadata,
                     )
+                    logging.info(f"✅ {model_name} completed successfully")
                 except Exception as e:
                     logging.error(
-                        f"* FATAL ERROR training {model_name} for feature set {feature_set} with {scoring_metric}: {e} !!!!",
+                        f"❌ FATAL ERROR training {model_name} for feature set {feature_set} with {scoring_metric}: {e}",
                         exc_info=True
                     )
                     mlflow.log_param(f"ERROR_{model_name}", str(e))
                     continue
+                    
+        logging.info(f"✅ Experiment completed for {feature_set} with {scoring_metric}")
+        
     except Exception as e:
-        logging.error(f"Error in experiment for feature set {feature_set} with {scoring_metric}: {e}", exc_info=True)
+        logging.error(f"❌ Error in experiment for feature set {feature_set} with {scoring_metric}: {e}", exc_info=True)
         raise
 
 def run_experiment_main(feature_sets: Optional[List[str]] = None, scoring_metrics: Optional[List[str]] = None):
-    logging.info("--- Starting Experiments ---")
+    logging.info("🚀 Starting Experiment Pipeline")
+    logging.info("="*80)
     
     try:
         config = load_config()
     except Exception as e:
-        logging.error(f"Error loading configuration: {e}", exc_info=True)
+        logging.error(f"❌ Error loading configuration: {e}", exc_info=True)
         raise
 
     if feature_sets is None:
@@ -231,16 +284,26 @@ def run_experiment_main(feature_sets: Optional[List[str]] = None, scoring_metric
         if isinstance(scoring_metrics, str):
             scoring_metrics = [scoring_metrics]
     
+    total_experiments = len(feature_sets) * len(scoring_metrics)
+    logging.info(f"📊 Planning {total_experiments} experiments:")
+    logging.info(f"   📁 Feature sets: {len(feature_sets)} ({', '.join(feature_sets)})")
+    logging.info(f"   📈 Scoring metrics: {len(scoring_metrics)} ({', '.join(scoring_metrics)})")
+    
     # Run experiments for each combination of feature set and scoring metric
+    experiment_count = 0
     for feature_set in feature_sets:
         for scoring_metric in scoring_metrics:
+            experiment_count += 1
+            logging.info(f"\n🔄 Experiment {experiment_count}/{total_experiments}")
             try:
                 run_experiment_for_feature_set(config, feature_set, scoring_metric)
             except Exception as e:
-                logging.error(f"Failed to run experiment for feature set {feature_set} with scoring metric {scoring_metric}: {e}", exc_info=True)
+                logging.error(f"❌ Failed experiment {experiment_count}: {feature_set} + {scoring_metric}: {e}", exc_info=True)
                 continue
     
-    logging.info("\n--- All Experiments Finished ---")
+    logging.info("\n" + "="*80)
+    logging.info(f"🎉 All Experiments Finished - {experiment_count}/{total_experiments} attempted")
+    logging.info("="*80)
 
 if __name__ == "__main__":
     run_experiment_main() 

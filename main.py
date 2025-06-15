@@ -43,7 +43,7 @@ def run_data_splitting():
         logger.info("✅ Data splitting completed")
         return True
     except Exception as e:
-        logger.error(f"❌ Data splitting failed: {str(e)}")
+        logger.error(f"❌ Data splitting failed: {str(e)}", exc_info=True)
         return False
 
 def run_feature_selection():

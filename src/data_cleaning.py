@@ -174,17 +174,8 @@ def clean_data():
     )
 
 
-    df["rooms_number_original"] = df["rooms_number"].copy()
-    df["rooms_number_original"] = (
-        df["rooms_number_original"].astype("str").replace("MORE", "11").astype("Int64")
-    )
-
     df["rooms_number"] = (
-        df["rooms_number"].astype("str").replace("5|6|7|8|9|10", "MORE", regex=True)
-    )
-    category_order = ["1", "2", "3", "4", "MORE"]
-    df["rooms_number"] = pd.Categorical(
-        df["rooms_number"], categories=category_order, ordered=True
+        df["rooms_number"].astype("str").replace("MORE", "11").astype("Int64")
     )
 
     df["is_private_owner"] = df["is_private_owner"].astype(int)
@@ -244,6 +235,8 @@ def clean_data():
             "has_street_name",
             "has_street_number",
             "price_per_m2",
+            "latitude",
+            "longitude",
         ],
         inplace=True,
     )

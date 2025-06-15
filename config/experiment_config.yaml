@@ -1,18 +1,15 @@
-experiment_version: "v1"
+experiment_version: "v4"
 
 feature_sets:
+  - "rfecv_all_nfeat_158_umap_count_loc.json"
+  - "rfecv_base_nfeat_112_nonpca_count_loc.json"
   - "rfecv_base_poi_pano_nfeat_160_nonpca_count_loc.json"
-  - "rfecv_all_nfeat_152_nonpca_count_loc.json"
-  - "comb_all_nfeat_201_pca_count_loc.json"
-  - "elasticnet_all_nfeat_296_pca_scaled_count_loc.json"
-  - "rfecv_base_nfeat_117_nonpca_count_loc.json"
-
+  - "rfecv_all_nfeat_158_pca_count_loc.json"
 
 
 models_to_run:
-  - "XGBoost"
-  - "RandomForest"
-
+  - "LightGBM"
+  
 feature_sets_dir: "feature_sets"
 optuna_dir: "optuna_studies"
 artifact_path: "models_and_artifacts"

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import pickle
 import time
 from typing import Dict, Any, Tuple, Optional
 
@@ -86,50 +87,21 @@ class ModelTrainer:
         logging.info(f"Tuning {model_name} with Optuna...")
         start_time = time.time()
 
-        # Fit preprocessor once on all training data
-        if feature_selection_metadata:
-            apply_scaling = feature_selection_metadata.get("apply_scale_transform", self.config["APPLY_SCALE_TRANSFORM"])
-            apply_pca = feature_selection_metadata.get("apply_pca_img_transform", self.config["APPLY_PCA_IMG_TRANSFORM"])
-            n_pca_components = feature_selection_metadata.get("n_pca_components", self.config["N_PCA_COMPONENTS"])
-            logging.info(f"Using feature selection metadata for transformer - "
-                        f"scaling={apply_scaling}, pca={apply_pca}, n_components={n_pca_components}")
-        else:
-            apply_scaling = self.config["APPLY_SCALE_TRANSFORM"]
-            apply_pca = self.config["APPLY_PCA_IMG_TRANSFORM"]
-            n_pca_components = self.config["N_PCA_COMPONENTS"]
-            logging.warning(f"No feature selection metadata available, using config defaults")
-
-        # Create and fit transformer on all training data
-        data_transformer = self.data_manager.create_data_transformer(
-            apply_scaling=apply_scaling,
-            apply_pca=apply_pca,
-            n_pca_components=n_pca_components
-        )
-        data_transformer.fit(self.data_manager.X_train_full_raw.copy(), self.data_manager.get_log_transformed_target())
-
-        # Get the valid feature names that exist after transformation
-        sample_transformed = data_transformer.transform(self.data_manager.X_train_full_raw.head(1).copy())
-        transformed_feature_names = data_transformer.get_feature_names_out()
-        sample_df = pd.DataFrame(sample_transformed, columns=transformed_feature_names)
+        # Get feature set path from the feature set name
+        feature_set_path = f"feature_sets/{self.feature_set_name}.json"
         
-        valid_selected_features = [
-            name for name in selected_feature_names
-            if name in sample_df.columns
-        ]
+        # Use centralized DataManager transformation
+        logging.info(f"🔄 Loading and transforming data using centralized DataManager")
+        X_train_transformed, X_test_transformed, feature_info = self.data_manager.get_transformed_data_from_feature_set(feature_set_path)
         
-        missing_features = [
-            name for name in selected_feature_names
-            if name not in sample_df.columns
-        ]
+        logging.info(f"✅ Data transformation completed")
+        logging.info(f"📊 Training data shape: {X_train_transformed.shape}")
+        logging.info(f"📊 Test data shape: {X_test_transformed.shape}")
+        logging.info(f"📋 Feature info: {feature_info}")
         
-        if missing_features:
-            logging.warning(f"Missing {len(missing_features)} features from selected list: {missing_features[:10]}{'...' if len(missing_features) > 10 else ''}")
-            logging.warning(f"This is likely due to OneHotEncoder min_frequency filtering or rare categories. Continuing with {len(valid_selected_features)} available features.")
-            raise ValueError(f"Missing {len(missing_features)} features from selected list: {missing_features[:10]}{'...' if len(missing_features) > 10 else ''}")
-        
-        if not valid_selected_features:
-            logging.error(f"CRITICAL ERROR - No valid selected features remaining after transformation!")
-            return None, None
+        # Get the actual features being used (may include image features)
+        actual_features = X_train_transformed.columns.tolist()
+        logging.info(f"📋 Using {len(actual_features)} features (may include image features)")
 
         def objective(trial):
             fold_scores = []
@@ -138,8 +110,9 @@ class ModelTrainer:
                 self.data_manager.get_log_transformed_target()
             )):
                 try:
-                    fold_score = self._process_fold(
-                        trial, fold_idx, train_idx, val_idx, model_name, model_config, valid_selected_features, data_transformer
+                    fold_score = self._process_fold_optimized(
+                        trial, fold_idx, train_idx, val_idx, model_name, model_config, 
+                        actual_features, X_train_transformed
                     )
                     if fold_score is not None:
                         fold_scores.append(fold_score)
@@ -174,10 +147,13 @@ class ModelTrainer:
             study.optimize(
                 objective,
                 n_trials=trials_to_run,
-                # callbacks=[mlflow_callback],
                 n_jobs=-1,
                 gc_after_trial=True,
             )
+            
+            sampler_path = study.user_attrs.get("sampler_path", f"optuna_samplers/{study.study_name}_sampler.pkl")
+            pruner_path = study.user_attrs.get("pruner_path", f"optuna_pruners/{study.study_name}_pruner.pkl")
+            self._save_sampler_and_pruner(study, sampler_path, pruner_path)
         else:
             logging.info(f"DEBUG: Study already has {current_completed_trials} trials, which meets or exceeds the target of {total_desired_trials}. No new trials will be run in this call.")
 
@@ -190,47 +166,26 @@ class ModelTrainer:
             model_config,
             study.best_trial.params,
             study.best_trial.value,
-            valid_selected_features,
+            actual_features,
             tuning_duration,
             start_time,
             parent_run_id,
-            data_transformer
+            X_train_transformed,
+            X_test_transformed,
+            feature_info
         )
 
         return final_run_id, study
 
-    def _process_fold(self, trial, fold_idx, train_idx, val_idx, model_name, model_config, selected_feature_names, data_transformer):
-        """Process a single cross-validation fold"""
-        # Get data for this fold
-        X_fold_train_raw = self.data_manager.X_train_full_raw.iloc[train_idx]
-        y_fold_train_log = self.data_manager.get_log_transformed_target().iloc[train_idx]
-        X_fold_val_raw = self.data_manager.X_train_full_raw.iloc[val_idx]
-        y_fold_val_log = self.data_manager.get_log_transformed_target().iloc[val_idx]
-
-        # Transform fold data using the pre-fitted transformer
-        X_fold_train_processed_np = data_transformer.transform(X_fold_train_raw.copy())
-        X_fold_val_processed_np = data_transformer.transform(X_fold_val_raw.copy())
+    def _process_fold_optimized(self, trial, fold_idx, train_idx, val_idx, model_name, model_config, selected_feature_names, X_train_transformed):
+        """Process a single cross-validation fold using pre-transformed data"""
+        # Get data for this fold using pre-transformed data
+        X_fold_train_selected = X_train_transformed.iloc[train_idx]
+        X_fold_val_selected = X_train_transformed.iloc[val_idx]
         
-        # Convert numpy arrays to DataFrames with proper column names
-        try:
-            transformed_feature_names = data_transformer.get_feature_names_out()
-            X_fold_train_processed_df = pd.DataFrame(
-                X_fold_train_processed_np,
-                columns=transformed_feature_names,
-                index=X_fold_train_raw.index,
-            )
-            X_fold_val_processed_df = pd.DataFrame(
-                X_fold_val_processed_np,
-                columns=transformed_feature_names,
-                index=X_fold_val_raw.index,
-            )
-        except Exception as e:
-            logging.error(f"Fold {fold_idx}: Error getting feature names from transformer: {e}. Skipping fold.")
-            return None
-
-        # Use the pre-validated selected features
-        X_fold_train_selected = X_fold_train_processed_df[selected_feature_names]
-        X_fold_val_selected = X_fold_val_processed_df[selected_feature_names]
+        # Get corresponding target values
+        y_fold_train_log = self.data_manager.get_log_transformed_target().iloc[train_idx]
+        y_fold_val_log = self.data_manager.get_log_transformed_target().iloc[val_idx]
 
         # Get parameters and train model
         params = get_model_params(model_name, trial)
@@ -259,32 +214,98 @@ class ModelTrainer:
         return score
 
     def _setup_optuna_study(self, model_name: str) -> optuna.Study:
-        """Setup Optuna study"""
+        """Setup Optuna study with sampler and pruner persistence"""
         scoring_metric = self.config["optuna"]["scoring_metric"]
         study_name = f"{model_name}_{self.feature_set_name}_{scoring_metric}_{self.experiment_version}_study"
         logging.info(f"Using Optuna study '{study_name}' with storage '{self.config['optuna']['study_db_path']}'")
+
+        # Use absolute paths for stability
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        samplers_dir = os.path.join(project_root, "optuna_samplers")
+        pruners_dir = os.path.join(project_root, "optuna_pruners")
+        
+        sampler_path = os.path.join(samplers_dir, f"{study_name}_sampler.pkl")
+        pruner_path = os.path.join(pruners_dir, f"{study_name}_pruner.pkl")
+        
+        os.makedirs(samplers_dir, exist_ok=True)
+        os.makedirs(pruners_dir, exist_ok=True)
+
+        sampler = self._load_or_create_sampler(sampler_path)
+        pruner = self._load_or_create_pruner(pruner_path)
 
         study = optuna.create_study(
             storage=self.config["optuna"]["study_db_path"],
             study_name=study_name,
             direction=self.config["optuna"]["direction"],
             load_if_exists=True,
-            sampler=optuna.samplers.TPESampler(seed=self.config['RANDOM_STATE']),
-            pruner=optuna.pruners.MedianPruner(),
+            sampler=sampler,
+            pruner=pruner,
         )
+
+        self._save_sampler_and_pruner(study, sampler_path, pruner_path)
 
         study.set_user_attr("run_type", "optuna_run")
         study.set_user_attr("model_name", model_name)
         study.set_user_attr("feature_set_name", self.feature_set_name)
         study.set_user_attr("experiment_version", self.experiment_version)
         study.set_user_attr("scoring_metric", scoring_metric)
-        study.set_user_attr("cv_folds", self.config["CV_FOLDS"])
+        study.set_user_attr("cv_folds", self.config["cv_folds"])
         study.set_user_attr("random_state", self.config["RANDOM_STATE"])
         study.set_user_attr("n_trials_optuna", self.config["optuna"]["n_trials"])
         study.set_user_attr("tuning_scoring_metric", self.config["optuna"]["scoring_metric"])
         study.set_user_attr("optuna_direction", self.config["optuna"]["direction"])
+        study.set_user_attr("sampler_path", sampler_path)
+        study.set_user_attr("pruner_path", pruner_path)
 
         return study
+
+    def _load_or_create_sampler(self, sampler_path: str) -> optuna.samplers.BaseSampler:
+        """Load existing sampler or create a new one"""
+        if os.path.exists(sampler_path):
+            try:
+                logging.info(f"Loading existing sampler from {sampler_path}")
+                with open(sampler_path, "rb") as f:
+                    sampler = pickle.load(f)
+                logging.info("Successfully loaded existing sampler for study resumption")
+                return sampler
+            except Exception as e:
+                logging.warning(f"Failed to load sampler from {sampler_path}: {e}. Creating new sampler.")
+        
+        logging.info("Creating new TPESampler with seed for reproducibility")
+        sampler = optuna.samplers.TPESampler(seed=self.config['RANDOM_STATE'])
+        return sampler
+
+    def _load_or_create_pruner(self, pruner_path: str) -> optuna.pruners.BasePruner:
+        """Load existing pruner or create a new one"""
+        if os.path.exists(pruner_path):
+            try:
+                logging.info(f"Loading existing pruner from {pruner_path}")
+                with open(pruner_path, "rb") as f:
+                    pruner = pickle.load(f)
+                logging.info("Successfully loaded existing pruner for study resumption")
+                return pruner
+            except Exception as e:
+                logging.warning(f"Failed to load pruner from {pruner_path}: {e}. Creating new pruner.")
+        
+        logging.info("Creating new MedianPruner")
+        pruner = optuna.pruners.MedianPruner()
+        return pruner
+
+    def _save_sampler_and_pruner(self, study: optuna.Study, sampler_path: str, pruner_path: str) -> None:
+        """Save the sampler and pruner for future resumption"""
+        try:
+            # Save sampler
+            with open(sampler_path, "wb") as f:
+                pickle.dump(study.sampler, f)
+            logging.info(f"Sampler saved to {sampler_path} for future study resumption")
+            
+            # Save pruner
+            with open(pruner_path, "wb") as f:
+                pickle.dump(study.pruner, f)
+            logging.info(f"Pruner saved to {pruner_path} for future study resumption")
+            
+        except Exception as e:
+            logging.error(f"Failed to save sampler/pruner: {e}")
 
     def _setup_mlflow_callback(self) -> MLflowCallback:
         """Setup MLflow callback for Optuna"""
@@ -307,17 +328,12 @@ class ModelTrainer:
         tuning_duration: float,
         start_time: float,
         parent_run_id: Optional[str] = None,
-        data_transformer=None,
+        X_train_transformed=None,
+        X_test_transformed=None,
+        feature_info=None,
     ) -> Optional[str]:
         """Train and log the final model using the best parameters"""
         logging.info(f"Training final model for {model_name} using best parameters...")
-
-        # Transform data using the pre-fitted transformer
-        X_train_processed_final_df, X_test_processed_final_df = self.data_manager.get_transformed_data(data_transformer)
-
-        # Use the pre-validated selected features
-        X_train_selected_final = X_train_processed_final_df[selected_feature_names]
-        X_test_selected_final = X_test_processed_final_df[selected_feature_names]
 
         # Train final model
         final_model_instance = model_config["model"]
@@ -330,11 +346,11 @@ class ModelTrainer:
         best_model_pipeline.set_params(**final_params)
         
         best_model_pipeline.set_params(**best_params)
-        best_model_pipeline.fit(X_train_selected_final, self.data_manager.get_log_transformed_target())
+        best_model_pipeline.fit(X_train_transformed, self.data_manager.get_log_transformed_target())
 
         # Make predictions
-        Y_predict_train_log = best_model_pipeline.predict(X_train_selected_final)
-        Y_predict_test_log = best_model_pipeline.predict(X_test_selected_final)
+        Y_predict_train_log = best_model_pipeline.predict(X_train_transformed)
+        Y_predict_test_log = best_model_pipeline.predict(X_test_transformed)
         Y_predict_train_orig = np.exp(Y_predict_train_log)
         Y_predict_test_orig = np.exp(Y_predict_test_log)
 
@@ -370,9 +386,9 @@ class ModelTrainer:
                 tuning_duration,
                 time.time() - start_time,
                 best_model_pipeline,
-                X_train_selected_final,
+                X_train_transformed,
                 selected_feature_names,
-                None
+                feature_info
             )
             return run.info.run_id
 
@@ -389,30 +405,38 @@ class ModelTrainer:
         model_pipeline,
         input_example_data,
         selected_feature_names: list,
-        feature_selection_metadata: Optional[Dict] = None,
+        feature_info: Optional[Dict] = None,
     ) -> None:
         """Log all relevant information to MLflow"""
         mlflow.set_tag("run_type", "best_run")
         mlflow.set_tag("experiment_version", self.experiment_version)
         mlflow.log_param("model_name", model_name)
         mlflow.set_tag("feature_set", self.feature_set_name)
-        mlflow.log_param("num_selected_features", len(selected_feature_names))
+        
+        # Log feature information from centralized approach
+        if feature_info:
+            mlflow.log_param("total_features", feature_info["total_features"])
+            mlflow.log_param("tabular_features", feature_info["tabular_features"])
+            mlflow.log_param("image_features", feature_info["image_features"])
+            mlflow.log_param("selected_tabular_features", feature_info["selected_tabular_features"])
+            mlflow.log_param("transformer_type", feature_info["transformer_type"])
+            mlflow.log_param("should_include_images", feature_info["should_include_images"])
+            
+            # Log feature selection metadata
+            for key, value in feature_info["feature_selection_metadata"].items():
+                mlflow.log_param(f"fs_meta_{key}", value)
+        else:
+            # Fallback to old approach
+            mlflow.log_param("num_selected_features", len(selected_feature_names))
+        
         mlflow.log_params({k: v for k, v in best_params.items()})
 
         # Log configuration parameters
-        mlflow.log_param("cv_folds", self.config["CV_FOLDS"])
+        mlflow.log_param("cv_folds", self.config["cv_folds"])
         mlflow.log_param("random_state", self.config["RANDOM_STATE"])
         mlflow.log_param("n_trials_optuna", self.config["optuna"]["n_trials"])
         mlflow.log_param("tuning_scoring_metric", self.config["optuna"]["scoring_metric"])
         mlflow.log_param("optuna_direction", self.config["optuna"]["direction"])
-
-        # Log feature selection metadata
-        if feature_selection_metadata:
-            for key, value in feature_selection_metadata.items():
-                if key in ('rfe_step_size', 'n_estimators', 'method'):
-                    mlflow.log_param(f"fs_{key}", value)
-                else:
-                    mlflow.log_param(f"{key}", value)
 
         # Log metrics
         mlflow.log_metric(self.config["MLFLOW_CALLBACK_METRIC_NAME"], best_score)
