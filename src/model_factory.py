@@ -23,6 +23,7 @@ def _detect_gpu_capabilities() -> Dict[str, Any]:
     config = {
         "pytorch_device": "cpu",
         "lgbm_device": None,
+        "xgb_device": None,
         "xgb_tree_method": "hist",
         "gpu_available": False
     }
