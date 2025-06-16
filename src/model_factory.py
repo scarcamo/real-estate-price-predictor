@@ -65,17 +65,20 @@ def _detect_gpu_capabilities() -> Dict[str, Any]:
         try:
             
             test_model = xgb.XGBRegressor(
-                tree_method='gpu_hist', 
+                tree_method='hist', 
+                device="cuda" if config["pytorch_device"] == "cuda" else "gpu",
                 n_estimators=1,
                 max_depth=3
             )
             test_model.fit(X_test, y_test)
             
-            config["xgb_tree_method"] = "gpu_hist"
+            config["xgb_tree_method"] = "hist"
+            config["xgb_device"] = "cuda" if config["pytorch_device"] == "cuda" else "gpu"
             logging.info("XGBoost GPU support confirmed.")
         except Exception as e:
             logging.warning("XGBoost GPU support not available")
             config["xgb_tree_method"] = "hist"
+            config["xgb_device"] = "cpu"
     else:
         logging.info("GPU acceleration disabled - using CPU for all models.")
     
@@ -108,6 +111,7 @@ def get_model_configs(
                 tree_method=gpu_config["xgb_tree_method"], 
                 objective="reg:squarederror",
                 n_jobs=n_jobs,
+                device=gpu_config["xgb_device"],
             ),
         },
         "XGBoostQuantile": {
