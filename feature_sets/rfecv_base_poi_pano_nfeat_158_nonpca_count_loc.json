@@ -1,7 +1,5 @@
 {
     "selected_features": [
-        "latitude",
-        "longitude",
         "is_private_owner",
         "area_m2",
         "floor_number",
@@ -27,7 +25,7 @@
         "distance_to_center_km",
         "room_size_m2",
         "floor_ratio",
-        "rooms_number_original",
+        "rooms_number",
         "play_areas_1000_m2",
         "park_areas_3000_m2",
         "dist_restaurant",
@@ -164,7 +162,7 @@
     "metadata": {
         "method": "rfecv",
         "feature_subset_used": "base_poi_pano",
-        "n_features_selected": 160,
+        "n_features_selected": 158,
         "apply_pca_img_transform": false,
         "n_pca_components": null,
         "apply_scale_transform": false,
