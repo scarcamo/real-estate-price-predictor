@@ -18,7 +18,7 @@ from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error, 
 from sklearn.model_selection import KFold
 import pandas as pd
 
-from src.model_factory import get_model_params, build_model_pipeline
+from src.model_factory import get_model_params, build_model_pipeline, get_model_configs
 from src.data_manager import DataManager
 
 def evaluate_model(y_true, y_pred, prefix=""):
@@ -98,21 +98,36 @@ class ModelTrainer:
         logging.info(f"📊 Training data shape: {X_train_transformed.shape}")
         logging.info(f"📊 Test data shape: {X_test_transformed.shape}")
         logging.info(f"📋 Feature info: {feature_info}")
+        logging.info("🚀 Using OPTIMIZED approach: Data transformed once, then split for CV")
         
         # Get the actual features being used (may include image features)
         actual_features = X_train_transformed.columns.tolist()
         logging.info(f"📋 Using {len(actual_features)} features (may include image features)")
 
+        # Use reduced CV folds for hyperparameter tuning
+        tuning_cv_folds = self.config.get("tuning_cv_folds", 3)
+        tuning_cv_strategy = KFold(
+            n_splits=tuning_cv_folds,
+            shuffle=True,
+            random_state=self.config["RANDOM_STATE"]
+        )
+        logging.info(f"⚡ Using {tuning_cv_folds} folds for hyperparameter tuning (optimized for speed)")
+
         def objective(trial):
             fold_scores = []
-            for fold_idx, (train_idx, val_idx) in enumerate(cv_strategy.split(
+            
+            # Get log-transformed target once
+            y_train_log = self.data_manager.get_log_transformed_target()
+            y_train_orig = self.data_manager.Y_train_raw[self.data_manager.target_variable]
+            
+            for fold_idx, (train_idx, val_idx) in enumerate(tuning_cv_strategy.split(
                 self.data_manager.X_train_full_raw, 
-                self.data_manager.get_log_transformed_target()
+                y_train_log
             )):
                 try:
                     fold_score = self._process_fold_optimized(
                         trial, fold_idx, train_idx, val_idx, model_name, model_config, 
-                        actual_features, X_train_transformed
+                        actual_features, X_train_transformed, y_train_log, y_train_orig
                     )
                     if fold_score is not None:
                         fold_scores.append(fold_score)
@@ -160,7 +175,7 @@ class ModelTrainer:
         tuning_duration = time.time() - start_time
         logging.info(f"Optuna hyperparameter tuning for {model_name} finished in {tuning_duration:.2f} seconds.")
 
-        # Train final model with best parameters
+        # Train final model with best parameters using full CV folds for robust evaluation
         final_run_id = self._train_final_model(
             model_name,
             model_config,
@@ -172,33 +187,30 @@ class ModelTrainer:
             parent_run_id,
             X_train_transformed,
             X_test_transformed,
-            feature_info
+            feature_info,
+            cv_strategy 
         )
 
         return final_run_id, study
 
-    def _process_fold_optimized(self, trial, fold_idx, train_idx, val_idx, model_name, model_config, selected_feature_names, X_train_transformed):
+    def _process_fold_optimized(self, trial, fold_idx, train_idx, val_idx, model_name, model_config, selected_feature_names, X_train_transformed, y_train_log, y_train_orig):
         """Process a single cross-validation fold using pre-transformed data"""
         # Get data for this fold using pre-transformed data
         X_fold_train_selected = X_train_transformed.iloc[train_idx]
         X_fold_val_selected = X_train_transformed.iloc[val_idx]
         
-        # Get corresponding target values
-        y_fold_train_log = self.data_manager.get_log_transformed_target().iloc[train_idx]
-        y_fold_val_log = self.data_manager.get_log_transformed_target().iloc[val_idx]
-
         # Get parameters and train model
         params = get_model_params(model_name, trial)
         trial_model_instance = model_config["model"]
         model_pipeline = build_model_pipeline(trial_model_instance)
         model_pipeline.set_params(**params)
 
-        model_pipeline.fit(X_fold_train_selected, y_fold_train_log)
+        model_pipeline.fit(X_fold_train_selected, y_train_log.iloc[train_idx])
         y_pred_val_log = model_pipeline.predict(X_fold_val_selected)
         
         # Calculate metrics
         y_pred_val_orig = np.exp(y_pred_val_log)
-        y_fold_val_orig = np.exp(y_fold_val_log)
+        y_fold_val_orig = np.exp(y_train_log.iloc[val_idx])
 
         if self.config["optuna"]["scoring_metric"] == "mape":
             score = mean_absolute_percentage_error(y_fold_val_orig, y_pred_val_orig)
@@ -287,8 +299,8 @@ class ModelTrainer:
             except Exception as e:
                 logging.warning(f"Failed to load pruner from {pruner_path}: {e}. Creating new pruner.")
         
-        logging.info("Creating new MedianPruner")
-        pruner = optuna.pruners.MedianPruner()
+        logging.info("Creating new SuccessiveHalvingPruner")
+        pruner = optuna.pruners.SuccessiveHalvingPruner()
         return pruner
 
     def _save_sampler_and_pruner(self, study: optuna.Study, sampler_path: str, pruner_path: str) -> None:
@@ -331,6 +343,7 @@ class ModelTrainer:
         X_train_transformed=None,
         X_test_transformed=None,
         feature_info=None,
+        cv_strategy: KFold = None,
     ) -> Optional[str]:
         """Train and log the final model using the best parameters"""
         logging.info(f"Training final model for {model_name} using best parameters...")
@@ -388,9 +401,10 @@ class ModelTrainer:
                 best_model_pipeline,
                 X_train_transformed,
                 selected_feature_names,
-                feature_info
+                feature_info,
             )
             return run.info.run_id
+
 
     def _log_to_mlflow(
         self,
@@ -406,6 +420,7 @@ class ModelTrainer:
         input_example_data,
         selected_feature_names: list,
         feature_info: Optional[Dict] = None,
+        final_cv_metrics: Optional[Dict] = None,
     ) -> None:
         """Log all relevant information to MLflow"""
         mlflow.set_tag("run_type", "best_run")
@@ -433,6 +448,7 @@ class ModelTrainer:
 
         # Log configuration parameters
         mlflow.log_param("cv_folds", self.config["cv_folds"])
+        mlflow.log_param("tuning_cv_folds", self.config.get("tuning_cv_folds", 3))
         mlflow.log_param("random_state", self.config["RANDOM_STATE"])
         mlflow.log_param("n_trials_optuna", self.config["optuna"]["n_trials"])
         mlflow.log_param("tuning_scoring_metric", self.config["optuna"]["scoring_metric"])
@@ -445,6 +461,7 @@ class ModelTrainer:
         mlflow.log_metrics(test_metrics)
         mlflow.log_metric("tuning_duration_sec", tuning_duration)
         mlflow.log_metric("total_pipeline_duration_sec", total_duration)
+        
 
         # Log model
         model_step_in_pipeline = model_pipeline.named_steps["model"]

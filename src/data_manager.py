@@ -263,7 +263,7 @@ class DataManager:
             
             # Analyze features
             all_features = X_train_transformed.columns.tolist()
-            image_features = [f for f in all_features if any(img_prefix in f for img_prefix in ['umap_', 'pca_', 'img_', 'interior_', 'exterior_', 'vector_', 'feature_'])]
+            image_features = [f for f in all_features if any(img_prefix in f for img_prefix in ['umap_', 'pca_', 'img_', 'interior_', 'exterior_', 'unfurnished_space_', 'other_interior_', 'vector_', 'feature_'])]
             tabular_features = [f for f in all_features if f not in image_features]
             
             feature_info = {

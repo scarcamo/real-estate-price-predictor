@@ -37,10 +37,10 @@ def get_default_hyperparameters(model_name: str) -> Dict[str, Any]:
         "LightGBM": {
             "objective": "huber",
             "min_child_samples": 37,
-            "max_depth": 42,
-            "num_leaves": 500,
+            "max_depth": 25,
+            "num_leaves": 50,
             "reg_alpha": 0.0006591423461978351,
-            "n_estimators": 5000,
+            "n_estimators": 500,
             "subsample": 0.9135201316522913,
             "learning_rate": 0.014490114072153929,
             "reg_lambda": 0.8582832434053244,
@@ -88,11 +88,11 @@ def load_hyperparameters_from_mlflow(run_id: str) -> Dict[str, Any]:
 
         # Extract hyperparameters from run params
         params = {}
-        model_prefix = "model__"
+        model_prefix = ""
 
         for key, value in run.data.params.items():
             if key.startswith(model_prefix):
-                # Remove model__ prefix
+                # Remove  prefix
                 param_name = key.replace(model_prefix, "")
 
                 # Try to convert to appropriate type
@@ -190,29 +190,40 @@ def train_single_model(
     ) as run:
         logger.info(f"MLflow Run ID: {run.info.run_id}")
 
-        # Log basic information
+        # Log basic information - matching trainer.py
+        mlflow.set_tag("run_type", "single_model_run")
+        mlflow.set_tag("experiment_version", config.get("experiment_version", "v1"))
         mlflow.set_tag("model_name", model_name)
         mlflow.set_tag("feature_set", feature_set_name)
         mlflow.set_tag("scoring_metric", scoring_metric)
         mlflow.set_tag("training_mode", "single_model_no_tuning")
 
-        # Log hyperparameters
-        for param_name, param_value in hyperparameters.items():
-            mlflow.log_param(f"model__{param_name}", param_value)
+        # Log model name as parameter (matching trainer.py)
+        mlflow.log_param("model_name", model_name)
 
-        # Log feature information
-        mlflow.log_param("n_features", feature_info["total_features"])
-        mlflow.log_param("n_tabular_features", feature_info["tabular_features"])
-        mlflow.log_param("n_image_features", feature_info["image_features"])
-        mlflow.log_param(
-            "n_selected_tabular_features", feature_info["selected_tabular_features"]
-        )
+        # Log hyperparameters with  prefix (matching trainer.py)
+        for param_name, param_value in hyperparameters.items():
+            mlflow.log_param(f"{param_name}", param_value)
+
+        # Log feature information - matching trainer.py format
+        mlflow.log_param("total_features", feature_info["total_features"])
+        mlflow.log_param("tabular_features", feature_info["tabular_features"])
+        mlflow.log_param("image_features", feature_info["image_features"])
+        mlflow.log_param("selected_tabular_features", feature_info["selected_tabular_features"])
         mlflow.log_param("transformer_type", feature_info["transformer_type"])
         mlflow.log_param("should_include_images", feature_info["should_include_images"])
 
-        # Log feature selection metadata
+        # Log feature selection metadata with fs_meta_ prefix (matching trainer.py)
         for param, value in feature_info["feature_selection_metadata"].items():
-            mlflow.log_param(param, value)
+            mlflow.log_param(f"fs_meta_{param}", value)
+
+        # Log configuration parameters (matching trainer.py)
+        mlflow.log_param("cv_folds", config["cv_folds"])
+        mlflow.log_param("random_state", config["RANDOM_STATE"])
+        # For single model, we don't have Optuna trials, so set to 0
+        mlflow.log_param("n_trials_optuna", 0)
+        mlflow.log_param("tuning_scoring_metric", scoring_metric)
+        mlflow.log_param("optuna_direction", "minimize" if scoring_metric in ["mape", "rmse"] else "maximize")
 
         # Cross-validation training using pre-transformed data
         cv_scores = []
@@ -288,6 +299,12 @@ def train_single_model(
         # Log CV results
         mlflow.log_metric(f"cv_{scoring_metric}_mean", mean_cv_score)
         mlflow.log_metric(f"cv_{scoring_metric}_std", std_cv_score)
+
+        # Log best CV score (matching trainer.py format)
+        mlflow.log_metric(f"best_optuna_cv_{scoring_metric}", mean_cv_score)
+        
+        # Log the MLflow callback metric (matching trainer.py format)
+        mlflow.log_metric(config.get("MLFLOW_CALLBACK_METRIC_NAME", f"cv_{scoring_metric}"), mean_cv_score)
 
         # Calculate and log mean metrics across folds
         for metric_name in ["rmse", "mape", "r2"]:
@@ -389,9 +406,21 @@ def train_single_model(
         )
         mlflow.log_text(json.dumps(feature_info), "feature_info.json")
 
+        # Log feature list as artifact (matching trainer.py format)
+        feature_list_path = "final_selected_features_list.txt"
+        with open(feature_list_path, "w") as f:
+            for feature in X_train_final.columns:
+                f.write(f"{feature}\n")
+        mlflow.log_artifact(feature_list_path, artifact_path="feature_info")
+        if os.path.exists(feature_list_path):
+            os.remove(feature_list_path)
+
+        # Log duration metrics (matching trainer.py format)
         end_time = time.time()
         total_duration = end_time - start_time
-        mlflow.log_metric("training_duration_seconds", total_duration)
+        mlflow.log_metric("tuning_duration_sec", 0)  # No tuning for single model
+        mlflow.log_metric("total_pipeline_duration_sec", total_duration)
+        mlflow.log_metric("training_duration_seconds", total_duration)  # Keep existing metric
 
         logger.info(f"✅ Training completed in {total_duration:.1f} seconds")
         logger.info(
@@ -411,17 +440,17 @@ def main():
 
     Usage:
         # Manual hyperparameters
-        python train_single_model.py --feature_set rfecv_all_nfeat_160_pca_count_loc.json \
+        python train_single_model.py --feature_set rfecv_all_nfeat_158_umap_count_loc.json \
                                     --model LightGBM \
-                                    --params '{"n_estimators": 1000, "max_depth": 10}'
+                                    --params '{"objective": "huber", "learning_rate": 0.00922908558352886, "n_estimators": 4800, "num_leaves": 300, "max_depth": 33, "min_child_samples": 16, "subsample": 0.2177655313067815, "colsample_bytree": 0.2339444644166288, "reg_alpha": 2.517432528090951e-07, "reg_lambda": 9.360235437478908e-07}'
 
         # Load from MLflow run
-        python train_single_model.py --feature_set rfecv_all_nfeat_160_pca_count_loc.json \
+        python train_single_model.py --feature_set rfecv_all_nfeat_158_umap_count_loc.json \
                                     --model LightGBM \
-                                    --mlflow_run_id abc123def456
+                                    --mlflow_run_id 
 
         # Use default hyperparameters
-        python train_single_model.py --feature_set rfecv_all_nfeat_160_pca_count_loc.json \
+        python train_single_model.py --feature_set rfecv_all_nfeat_158_umap_count_loc.json \
                                     --model LightGBM \
                                     --use_defaults
     """
@@ -436,7 +465,7 @@ def main():
         "--feature_set",
         type=str,
         required=True,
-        help="Path to feature set JSON file (e.g., 'feature_sets/rfecv_all_nfeat_160_pca_count_loc.json')",
+        help="Path to feature set JSON file (e.g., 'feature_sets/rfecv_all_nfeat_158_umap_count_loc.json')",
     )
 
     parser.add_argument(

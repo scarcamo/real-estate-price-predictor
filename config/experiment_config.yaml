@@ -1,24 +1,27 @@
-experiment_version: "v4"
+experiment_version: "v6"
 
 feature_sets:
-  - "rfecv_all_nfeat_158_umap_count_loc.json"
-  - "rfecv_base_nfeat_112_nonpca_count_loc.json"
-  - "rfecv_base_poi_pano_nfeat_160_nonpca_count_loc.json"
   - "rfecv_all_nfeat_158_pca_count_loc.json"
+  - "rfecv_base_nfeat_56_nonpca_count_loc.json"
+  - "rfecv_all_nfeat_158_umap_count_loc.json"
+  - "rfecv_base_poi_pano_nfeat_158_nonpca_count_loc.json"
 
 
 models_to_run:
-  - "XGBoost"
-  - "RandomForest"
-  - "XGBoostQuantile"
-   
+  - "LightGBM"
+
 feature_sets_dir: "feature_sets"
 optuna_dir: "optuna_studies"
 artifact_path: "models_and_artifacts"
 
 target_variable: "price"
 
+# Data filtering options
+data_filtering:
+  filter_by_has_img: true
+
 cv_folds: 5
+tuning_cv_folds: 5
 
 # Optuna hyperparameter tuning settings
 optuna:

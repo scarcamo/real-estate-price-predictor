@@ -14,9 +14,16 @@ from sklearn.preprocessing import (
     RobustScaler,
     StandardScaler,
 )
-from umap import UMAP
 
 from src.config import load_config
+
+UMAP = None
+
+def get_umap():
+    global UMAP
+    if UMAP is None:
+        from umap import UMAP
+    return UMAP
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -62,7 +69,7 @@ def validate_dataframe(X: pd.DataFrame, name: str = "DataFrame") -> None:
 
 class ImageFeatureProcessor(BaseEstimator, TransformerMixin):
     """
-    Processes image features separately by type (interior, interior_building, exterior).
+    Processes image features separately by type (interior, other_interior, exterior, unfurnished_space).
     Applies dimensionality reduction (PCA or UMAP) to each type separately.
     """
     
@@ -90,7 +97,8 @@ class ImageFeatureProcessor(BaseEstimator, TransformerMixin):
         """Identify different types of image features"""
         image_types = {
             'interior': [col for col in feature_names if 'interior_' in col and 'building' not in col],
-            'interior_building': [col for col in feature_names if 'interior_building_' in col],
+            'other_interior': [col for col in feature_names if 'other_interior_' in col],
+            'unfurnished_space': [col for col in feature_names if 'unfurnished_space_' in col],
             'exterior': [col for col in feature_names if 'exterior_' in col]
         }
         return image_types
@@ -133,7 +141,7 @@ class ImageFeatureProcessor(BaseEstimator, TransformerMixin):
             # Apply dimensionality reduction
             if self.use_umap:
                 n_components = min(self.n_umap_components, X_scaled.shape[1], X_scaled.shape[0] - 1)
-                reducer = UMAP(
+                reducer = get_umap()(
                     n_components=n_components,
                     random_state=self.random_state,
                     n_jobs=1  # UMAP can be unstable with multiple jobs
@@ -472,6 +480,7 @@ class CombinedFeatureTransformer(BaseEstimator, TransformerMixin):
         self.selected_features = selected_features or []
         self.should_include_images = should_include_images
         self.feature_names_out_ = None
+        self.img_cat_cols_ = []  # Initialize empty list for img_cat columns
 
         logging.info(f"CombinedFeatureTransformer initialized with {len(self.selected_features)} selected features")
         
@@ -481,14 +490,20 @@ class CombinedFeatureTransformer(BaseEstimator, TransformerMixin):
         
         if X_images is not None:
             validate_dataframe(X_images, "CombinedFeatureTransformer image input")
+            # Store img_cat columns during fit
+            self.img_cat_cols_ = [col for col in X_images.columns if col.startswith('img_cat_')]
         
         # Fit tabular transformer
         self.tabular_transformer.fit(X_tabular, y)
         
         # Fit image transformer if needed
         if self.should_include_images and self.image_transformer is not None and X_images is not None:
-            self.image_transformer.fit(X_images, y)
-            print("Fitted image transformer")
+            # Get non-OHE image columns (exclude img_cat_)
+            non_ohe_img_cols = [col for col in X_images.columns if not col.startswith('img_cat_')]
+            if non_ohe_img_cols:
+                X_images_non_ohe = X_images[non_ohe_img_cols]
+                self.image_transformer.fit(X_images_non_ohe, y)
+                print("Fitted image transformer")
         
         # Build feature names
         self._build_feature_names()
@@ -498,60 +513,52 @@ class CombinedFeatureTransformer(BaseEstimator, TransformerMixin):
         return self
     
     def transform(self, X, X_images=None):
-        """Transform features and combine
-        
-        Parameters:
-        -----------
-        X : pd.DataFrame
-            Tabular features (when used as standard sklearn transformer)
-            or X_tabular when called with keyword arguments
-        X_images : pd.DataFrame, optional
-            Image features (only used when called with keyword arguments)
-        """
-        # Handle both sklearn standard signature and our custom dual-input signature
-        if X_images is not None:
-            # Called with explicit X_images, X is the tabular data
-            return self._transform_impl(X, X_images)
-        else:
-            # Standard sklearn transform call, X should be tabular data
-            # For image features, we need to get them from somewhere else
-            # This case should not happen in our current setup but handle it gracefully
-            return self._transform_impl(X, None)
+        """Transform data"""
+        return self._transform_impl(X, X_images)
     
     def _transform_impl(self, X_tabular, X_images=None):
-        """Internal transform implementation"""
-        validate_dataframe(X_tabular, "CombinedFeatureTransformer transform tabular input")
+        """Implementation of transform method"""
+        validate_dataframe(X_tabular, "CombinedFeatureTransformer tabular input")
         
-        if X_images is not None:
-            validate_dataframe(X_images, "CombinedFeatureTransformer transform image input")
-        
-        # Transform tabular features
+        # Transform tabular data
         X_tabular_transformed = self.tabular_transformer.transform(X_tabular)
         
-        # Get tabular feature names
+        # Convert to DataFrame with feature names
         try:
-            tabular_feature_names = self.tabular_transformer.get_feature_names_out()
+            tabular_feature_names = self.tabular_transformer.get_feature_names_out().tolist()
         except:
             tabular_feature_names = [f"tabular_{i}" for i in range(X_tabular_transformed.shape[1])]
         
-        # Create tabular DataFrame
-        if isinstance(X_tabular_transformed, np.ndarray):
-            X_tabular_df = pd.DataFrame(X_tabular_transformed, columns=tabular_feature_names, index=X_tabular.index)
-        else:
-            X_tabular_df = X_tabular_transformed
+        X_tabular_df = pd.DataFrame(
+            X_tabular_transformed,
+            columns=tabular_feature_names,
+            index=X_tabular.index
+        )
         
-        # Filter selected tabular features
-        available_tabular_features = [f for f in self.selected_features if f in X_tabular_df.columns]
-        X_selected_tabular = X_tabular_df[available_tabular_features]
+        # Filter to selected tabular features
+        X_selected_tabular = X_tabular_df[[f for f in self.selected_features if f in tabular_feature_names]]
         
         # Transform and add image features if needed
-        if self.should_include_images and self.image_transformer is not None and X_images is not None:
-            X_images_transformed = self.image_transformer.transform(X_images)
-            image_feature_names = self.image_transformer.get_feature_names_out()
+        if self.should_include_images and X_images is not None:
+            # Use stored img_cat_cols_ for OHE features
+            non_ohe_img_cols = [col for col in X_images.columns if not col.startswith('img_cat_')]
             
-            # Create image DataFrame and reindex to match tabular data, filling missing with 0
-            X_images_df = pd.DataFrame(X_images_transformed, columns=image_feature_names, index=X_images.index)
-            X_images_df = X_images_df.reindex(X_tabular.index).fillna(0)
+            # Handle non-OHE image features with transformer
+            if non_ohe_img_cols and self.image_transformer is not None:
+                X_images_non_ohe = X_images[non_ohe_img_cols]
+                X_images_transformed = self.image_transformer.transform(X_images_non_ohe)
+                image_feature_names = self.image_transformer.get_feature_names_out()
+                
+                # Create image DataFrame and reindex to match tabular data
+                X_images_df = pd.DataFrame(X_images_transformed, columns=image_feature_names, index=X_images.index)
+                X_images_df = X_images_df.reindex(X_tabular.index).fillna(0)
+            else:
+                X_images_df = pd.DataFrame(index=X_tabular.index)
+            
+            # Add OHE image features using stored img_cat_cols_
+            if self.img_cat_cols_:
+                X_img_cat_df = X_images[self.img_cat_cols_].reindex(X_tabular.index).fillna(0)
+                X_images_df = pd.concat([X_images_df, X_img_cat_df], axis=1)
             
             # Combine tabular and image features
             X_combined = pd.concat([X_selected_tabular, X_images_df], axis=1)
@@ -582,10 +589,7 @@ class CombinedFeatureTransformer(BaseEstimator, TransformerMixin):
                 self.feature_names_out_.extend(image_features)
             except:
                 pass  # No image features
-    
-    def get_feature_names_out(self, input_features=None):
-        """Get output feature names"""
-        if self.feature_names_out_ is not None:
-            return np.array(self.feature_names_out_, dtype=object)
-        else:
-            return np.array([], dtype=object)
+            
+            # Add img_cat_ features to output feature names
+            if hasattr(self, 'img_cat_cols_'):
+                self.feature_names_out_.extend(self.img_cat_cols_)

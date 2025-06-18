@@ -63,23 +63,12 @@ def _detect_gpu_capabilities() -> Dict[str, Any]:
             logging.warning("LightGBM GPU support not available")
             config["lgbm_device"] = None
         
-        try:
-            
-            test_model = xgb.XGBRegressor(
-                tree_method='hist', 
-                device="cuda" if config["pytorch_device"] == "cuda" else "gpu",
-                n_estimators=1,
-                max_depth=3
-            )
-            test_model.fit(X_test, y_test)
-            
-            config["xgb_tree_method"] = "hist"
-            config["xgb_device"] = "cuda" if config["pytorch_device"] == "cuda" else "gpu"
+        if config["pytorch_device"] == "cuda":
             logging.info("XGBoost GPU support confirmed.")
-        except Exception as e:
-            logging.warning("XGBoost GPU support not available")
-            config["xgb_tree_method"] = "hist"
-            config["xgb_device"] = "cpu"
+            config["xgb_device"] = "cuda"
+        else:
+            logging.info("No GPU available, using CPU for XGBoost")
+        
     else:
         logging.info("GPU acceleration disabled - using CPU for all models.")
     
@@ -104,6 +93,7 @@ def get_model_configs(
                 n_jobs=n_jobs,
                 verbose=-1,
                 device=gpu_config["lgbm_device"],
+                callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
             ),
         },
         "XGBoost": {
@@ -113,6 +103,8 @@ def get_model_configs(
                 objective="reg:squarederror",
                 n_jobs=n_jobs,
                 device=gpu_config["xgb_device"],
+                early_stopping_rounds=50,
+                eval_metric=metric,
             ),
         },
         "XGBoostQuantile": {
@@ -122,6 +114,8 @@ def get_model_configs(
                 objective="reg:quantileerror",
                 quantile_alpha=0.5,
                 n_jobs=n_jobs,
+                early_stopping_rounds=50,
+                eval_metric=metric,
             ),
         },
         "RandomForest": {
@@ -139,10 +133,10 @@ def get_model_params(
 
     if model_name == "RandomForest":
         params[f"{model_prefix}n_estimators"] = trial.suggest_int(
-            f"{model_prefix}n_estimators", 400, 2000, step=100
+            f"{model_prefix}n_estimators", 500, 5000, step=100
         )
         params[f"{model_prefix}max_depth"] = trial.suggest_int(
-            f"{model_prefix}max_depth", 3, 50
+            f"{model_prefix}max_depth", 3, 100
         )
         params[f"{model_prefix}min_samples_split"] = trial.suggest_int(
             f"{model_prefix}min_samples_split", 2, 50
@@ -161,13 +155,13 @@ def get_model_params(
         params[f"{model_prefix}max_depth"] = trial.suggest_int(
             f"{model_prefix}max_depth",
             3,
-            50,
+            100,
         )
         params[f"{model_prefix}learning_rate"] = trial.suggest_float(
             f"{model_prefix}learning_rate", 0.01, 0.3, log=True
         )
         params[f"{model_prefix}n_estimators"] = trial.suggest_int(
-            f"{model_prefix}n_estimators", 100, 2500, step=100
+            f"{model_prefix}n_estimators", 400, 5000, step=100
         )
         params[f"{model_prefix}min_child_weight"] = trial.suggest_int(
             f"{model_prefix}min_child_weight",
@@ -199,25 +193,25 @@ def get_model_params(
         )
 
         params[f"{model_prefix}learning_rate"] = trial.suggest_float(
-            f"{model_prefix}learning_rate", 1e-3, 0.3, log=True
+            f"{model_prefix}learning_rate", 1e-2, 0.3, log=True
         )
         params[f"{model_prefix}n_estimators"] = trial.suggest_int(
-            f"{model_prefix}n_estimators", 1000, 4000, step=100
+            f"{model_prefix}n_estimators", 800, 6000, step=100
         )
         params[f"{model_prefix}num_leaves"] = trial.suggest_int(
-            f"{model_prefix}num_leaves", 50, 400
+            f"{model_prefix}num_leaves", 20, 500
         )
         params[f"{model_prefix}max_depth"] = trial.suggest_int(
-            f"{model_prefix}max_depth", 3, 50
+            f"{model_prefix}max_depth", 3, 150
         )
         params[f"{model_prefix}min_child_samples"] = trial.suggest_int(
             f"{model_prefix}min_child_samples", 5, 100
         )
         params[f"{model_prefix}subsample"] = trial.suggest_float(
-            f"{model_prefix}subsample", 0.6, 1.0
+            f"{model_prefix}subsample", 0.1, 1.0
         )
         params[f"{model_prefix}colsample_bytree"] = trial.suggest_float(
-            f"{model_prefix}colsample_bytree", 0.5, 1.0
+            f"{model_prefix}colsample_bytree", 0.1, 1.0
         )
         params[f"{model_prefix}reg_alpha"] = trial.suggest_float(
             f"{model_prefix}reg_alpha", 1e-8, 10.0, log=True
