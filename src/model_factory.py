@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict
 
 import lightgbm as lgb
+import numpy as np
 import torch
 import xgboost as xgb
 from sklearn.ensemble import RandomForestRegressor
@@ -32,21 +33,21 @@ def _detect_gpu_capabilities() -> Dict[str, Any]:
     if torch.cuda.is_available():
         config["pytorch_device"] = "cuda"
         config["gpu_available"] = True
-        logging.info("NVIDIA CUDA GPU detected.")
+        logging.debug("NVIDIA CUDA GPU detected.")
     elif torch.backends.mps.is_available():
         config["pytorch_device"] = "mps"
         config["gpu_available"] = True
-        logging.info("Apple Metal (MPS) GPU detected.")
+        logging.debug("Apple Metal (MPS) GPU detected.")
     else:
-        logging.info("No PyTorch-compatible GPU found.")
+        logging.debug("No PyTorch-compatible GPU found.")
     
-    import numpy as np
+    
     # Create small test data
     X_test = np.random.random((100, 10))
     y_test = np.random.random(100)
 
     # check GPU support
-    if config["gpu_available"]:
+    if config["gpu_available"] and config["pytorch_device"]=="cuda":
         try:
             
             test_model = lgb.LGBMRegressor(
@@ -103,7 +104,6 @@ def get_model_configs(
                 objective="reg:squarederror",
                 n_jobs=n_jobs,
                 device=gpu_config["xgb_device"],
-                early_stopping_rounds=50,
                 eval_metric=metric,
             ),
         },
@@ -114,7 +114,7 @@ def get_model_configs(
                 objective="reg:quantileerror",
                 quantile_alpha=0.5,
                 n_jobs=n_jobs,
-                early_stopping_rounds=50,
+                device=gpu_config["xgb_device"],
                 eval_metric=metric,
             ),
         },
@@ -133,22 +133,19 @@ def get_model_params(
 
     if model_name == "RandomForest":
         params[f"{model_prefix}n_estimators"] = trial.suggest_int(
-            f"{model_prefix}n_estimators", 500, 5000, step=100
+            f"{model_prefix}n_estimators", 200, 1800, step=100
         )
         params[f"{model_prefix}max_depth"] = trial.suggest_int(
             f"{model_prefix}max_depth", 3, 100
         )
         params[f"{model_prefix}min_samples_split"] = trial.suggest_int(
-            f"{model_prefix}min_samples_split", 2, 50
+            f"{model_prefix}min_samples_split", 5, 30
         )
         params[f"{model_prefix}min_samples_leaf"] = trial.suggest_int(
-            f"{model_prefix}min_samples_leaf", 1, 30
+            f"{model_prefix}min_samples_leaf", 2, 15
         )
         params[f"{model_prefix}max_features"] = trial.suggest_categorical(
-            f"{model_prefix}max_features", ["sqrt", "log2", 0.5, 0.7, 1.0]
-        )
-        params[f"{model_prefix}bootstrap"] = trial.suggest_categorical(
-            f"{model_prefix}bootstrap", [True, False]
+            f"{model_prefix}max_features", [0.5, 0.7, 1.0]
         )
 
     elif model_name in ["XGBoost", "XGBoostQuantile"]:
@@ -186,23 +183,28 @@ def get_model_params(
             f"{model_prefix}reg_alpha", 1e-8, 200.0, log=True
         )
 
+        if model_name == "XGBoostQuantile":
+            params[f"{model_prefix}quantile_alpha"] = trial.suggest_float(
+                f"{model_prefix}quantile_alpha", 0.4, 0.8, step=0.05
+            )
+
     elif model_name == "LightGBM":
         params[f"{model_prefix}objective"] = trial.suggest_categorical(
             f"{model_prefix}objective",
-            ["regression_l2", "huber"],
+            ["regression_l2", "huber", "regression_l1"],
         )
 
         params[f"{model_prefix}learning_rate"] = trial.suggest_float(
-            f"{model_prefix}learning_rate", 1e-2, 0.3, log=True
+            f"{model_prefix}learning_rate", 1e-2, 0.1, log=True
         )
         params[f"{model_prefix}n_estimators"] = trial.suggest_int(
-            f"{model_prefix}n_estimators", 800, 6000, step=100
+            f"{model_prefix}n_estimators", 800, 8000, step=100
         )
         params[f"{model_prefix}num_leaves"] = trial.suggest_int(
             f"{model_prefix}num_leaves", 20, 500
         )
         params[f"{model_prefix}max_depth"] = trial.suggest_int(
-            f"{model_prefix}max_depth", 3, 150
+            f"{model_prefix}max_depth", 3, 200
         )
         params[f"{model_prefix}min_child_samples"] = trial.suggest_int(
             f"{model_prefix}min_child_samples", 5, 100

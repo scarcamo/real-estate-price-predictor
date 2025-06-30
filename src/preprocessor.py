@@ -78,12 +78,14 @@ class ImageFeatureProcessor(BaseEstimator, TransformerMixin):
                  use_umap=False, 
                  n_pca_components=N_PCA_COMPONENTS,
                  n_umap_components=N_UMAP_COMPONENTS,
-                 random_state=42):
+                 random_state=42,
+                 exclude_image_types=None):
         self.use_pca = use_pca
         self.use_umap = use_umap
         self.n_pca_components = n_pca_components
         self.n_umap_components = n_umap_components
         self.random_state = random_state
+        self.exclude_image_types = exclude_image_types or []
         
         self.imputers_ = {}
         self.scalers_ = {}
@@ -92,16 +94,26 @@ class ImageFeatureProcessor(BaseEstimator, TransformerMixin):
         self.feature_names_out_ = None
 
         logging.info(f"📷 ImageFeatureProcessor initialized with {self.use_pca} PCA and {self.use_umap} UMAP")
+        if self.exclude_image_types:
+            logging.info(f"🚫 Excluding image types: {self.exclude_image_types}")
         
     def _identify_image_types(self, feature_names):
-        """Identify different types of image features"""
-        image_types = {
+        """
+        Identify different types of image features, excluding specified types.
+        """
+        base_image_types = {
             'interior': [col for col in feature_names if 'interior_' in col and 'building' not in col],
             'other_interior': [col for col in feature_names if 'other_interior_' in col],
             'unfurnished_space': [col for col in feature_names if 'unfurnished_space_' in col],
-            'exterior': [col for col in feature_names if 'exterior_' in col]
+            'exterior': [col for col in feature_names if 'exterior_' in col],
+            'bathroom': [col for col in feature_names if 'bathroom_' in col],
+            'bedroom': [col for col in feature_names if 'bedroom_' in col],
+            'kitchen': [col for col in feature_names if 'kitchen_' in col],
+            'living_room': [col for col in feature_names if 'living_room_' in col]
         }
-        return image_types
+        
+        # Remove excluded image types
+        return {k: v for k, v in base_image_types.items() if k not in self.exclude_image_types}
     
     def fit(self, X, y=None):
         """Fit the image feature processor"""
@@ -249,56 +261,96 @@ class GroupedMedianImputer(BaseEstimator, TransformerMixin):
                 f"Group column '{self.group_col}' not found in input DataFrame."
             )
 
+        # Add diagnostic logging
+        logging.info("GroupedMedianImputer: Starting fit")
+        
         df_for_stats = X.copy()
-        if self.outlier_col and self.outlier_col in df_for_stats.columns:
-            try:
-                outlier_mask = df_for_stats[self.outlier_col].astype(bool)
-                df_no_outliers = df_for_stats[~outlier_mask]
-                if not df_no_outliers.empty:
-                    df_for_stats = df_no_outliers
-                else:
-                    warnings.warn(
-                        f"DataFrame empty after outlier filter for '{self.outlier_col}'. Using original data for stats."
-                    )
-            except Exception as e:
-                warnings.warn(
-                    f"Outlier filter failed for '{self.outlier_col}': {e}. Using original data for stats."
-                )
-
+        self.group_medians_ = {}
+        
+        # Count numeric columns for summary
+        numeric_count = 0
+        total_count = len(self.feature_cols_to_impute)
+        
+        # Process each numeric column
         for col in self.feature_cols_to_impute:
-            if col not in df_for_stats.columns:
+            if col not in X.columns:
                 continue
-            group_medians = df_for_stats.groupby(self.group_col)[col].median()
-            global_median = df_for_stats[col].median()
-            self.group_medians_[col] = group_medians
-            self.global_medians_[col] = global_median
-
-        self.fitted_ = True
+                
+            # Check if column is numeric - handle both numpy and pandas dtypes
+            is_numeric = (
+                pd.api.types.is_numeric_dtype(X[col]) or  # This handles pandas nullable types
+                np.issubdtype(X[col].dtype, np.number)    # This handles numpy types
+            )
+            
+            if not is_numeric:
+                continue
+            
+            numeric_count += 1
+            
+            try:
+                # Calculate group medians
+                group_medians = df_for_stats.groupby(self.group_col)[col].median()
+                self.group_medians_[col] = group_medians
+            except Exception as e:
+                logging.error(f"Failed to compute medians for '{col}': {str(e)}")
+                continue
+        
+        logging.info(f"GroupedMedianImputer: Processed {numeric_count} numeric columns out of {total_count} total")
         return self
 
     def transform(self, X):
-        if not hasattr(self, "fitted_"):
-            raise RuntimeError("Transformer has not been fitted yet.")
-        
-        validate_dataframe(X, "GroupedMedianImputer transform input")
+        """Transform X by imputing missing values with group medians."""
+        validate_dataframe(X, "GroupedMedianImputer input")
         
         if not isinstance(X, pd.DataFrame):
-            raise ValueError(
-                "GroupedMedianImputer expects a pandas DataFrame for transform."
-            )
-        Xt = X.copy()
+            raise ValueError("GroupedMedianImputer expects a pandas DataFrame.")
+        
+        # Create a copy to avoid modifying the input
+        X_imputed = X.copy()
+        
+        # Track imputation statistics
+        imputed_cols = 0
+        total_imputed = 0
+        
         for col in self.feature_cols_to_impute:
-            if col not in Xt.columns or col not in self.group_medians_:
+            if col not in X.columns:
                 continue
-            group_map = self.group_medians_.get(col, pd.Series(dtype="float64"))
-            global_fallback = self.global_medians_.get(col, 0)
-            imputation_values = (
-                Xt[self.group_col].map(group_map).fillna(global_fallback)
+                
+            # Check if column is numeric - handle both numpy and pandas dtypes
+            is_numeric = (
+                pd.api.types.is_numeric_dtype(X[col]) or  # This handles pandas nullable types
+                np.issubdtype(X[col].dtype, np.number)    # This handles numpy types
             )
-            Xt[col] = Xt[col].fillna(imputation_values)
-            if Xt[col].isnull().any():
-                Xt[col].fillna(global_fallback, inplace=True)
-        return Xt
+            
+            if not is_numeric:
+                continue
+                
+            group_map = self.group_medians_.get(col, pd.Series(dtype="float64"))
+            
+            # Get missing value mask
+            missing_mask = X_imputed[col].isna()
+            missing_count = missing_mask.sum()
+            
+            if missing_count > 0:
+                # Get the groups for rows with missing values
+                groups = X_imputed.loc[missing_mask, self.group_col]
+                
+                # Map group medians to missing values
+                X_imputed.loc[missing_mask, col] = groups.map(group_map)
+                
+                # For any remaining missing values (groups not in training), use overall median
+                still_missing = X_imputed[col].isna()
+                if still_missing.any():
+                    overall_median = group_map.median()
+                    X_imputed.loc[still_missing, col] = overall_median
+                
+                imputed_cols += 1
+                total_imputed += missing_count
+        
+        if imputed_cols > 0:
+            logging.info(f"GroupedMedianImputer: Imputed {total_imputed} values across {imputed_cols} columns")
+        
+        return X_imputed
 
     def get_feature_names_out(self, input_features=None):
         if input_features is not None:
@@ -422,9 +474,16 @@ def create_enhanced_data_transformer_pipeline(
     n_umap_components=N_UMAP_COMPONENTS,
     include_location_features=True,
     random_state=42,
+    exclude_image_types=None,
 ):
     """
     Enhanced pipeline that handles tabular and image features separately.
+    
+    Parameters:
+    -----------
+    ...
+    exclude_image_types : list, optional
+        List of image types to exclude from processing (e.g., ['bathroom', 'exterior'])
     
     Returns:
     --------
@@ -456,10 +515,13 @@ def create_enhanced_data_transformer_pipeline(
             use_umap=use_umap,
             n_pca_components=n_pca_components,
             n_umap_components=n_umap_components,
-            random_state=random_state
+            random_state=random_state,
+            exclude_image_types=exclude_image_types
         )
         
         print(f"Created image transformer: PCA={use_pca}, UMAP={use_umap}")
+        if exclude_image_types:
+            print(f"Excluding image types: {exclude_image_types}")
     
     return tabular_transformer, image_transformer
 
@@ -487,14 +549,16 @@ class CombinedFeatureTransformer(BaseEstimator, TransformerMixin):
     def fit(self, X_tabular, X_images=None, y=None):
         """Fit both transformers"""
         validate_dataframe(X_tabular, "CombinedFeatureTransformer tabular input")
-        
+
         if X_images is not None:
             validate_dataframe(X_images, "CombinedFeatureTransformer image input")
             # Store img_cat columns during fit
             self.img_cat_cols_ = [col for col in X_images.columns if col.startswith('img_cat_')]
         
         # Fit tabular transformer
+        logging.info("CombinedFeatureTransformer.fit: Fitting tabular transformer...")
         self.tabular_transformer.fit(X_tabular, y)
+        logging.info("CombinedFeatureTransformer.fit: Tabular transformer fitted successfully")
         
         # Fit image transformer if needed
         if self.should_include_images and self.image_transformer is not None and X_images is not None:
@@ -502,7 +566,9 @@ class CombinedFeatureTransformer(BaseEstimator, TransformerMixin):
             non_ohe_img_cols = [col for col in X_images.columns if not col.startswith('img_cat_')]
             if non_ohe_img_cols:
                 X_images_non_ohe = X_images[non_ohe_img_cols]
+                logging.info("CombinedFeatureTransformer.fit: Fitting image transformer...")
                 self.image_transformer.fit(X_images_non_ohe, y)
+                logging.info("CombinedFeatureTransformer.fit: Image transformer fitted successfully")
                 print("Fitted image transformer")
         
         # Build feature names

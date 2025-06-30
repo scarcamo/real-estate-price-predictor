@@ -3,8 +3,9 @@ import numpy as np
 import pandas as pd
 from typing import Tuple, Dict, Any, Optional
 import json
+import os
 
-from src.split_data import get_train_test_data, _get_data
+from src.split_data import load_split_data
 from src.preprocessor import (
     create_data_transformer_pipeline, 
     create_enhanced_data_transformer_pipeline,
@@ -18,6 +19,7 @@ class DataManager:
         self.district_col_name = "district"
         self.outlier_col_name = "outlier"
         self.include_location_features = config.get("INCLUDE_LOCATION_FEATURES", False)
+        self.exclude_image_types = config.get("exclude_image_types", [])
         
         self._data = None
         self.X_train_full_raw = None
@@ -32,22 +34,27 @@ class DataManager:
         self.original_categorical_cols = None
 
     def load_data(self) -> None:
-        """Load and prepare the raw data"""
-        if self._data is None:
-            logging.info("Loading and cleaning raw data for the first time...")
-            self._data = _get_data()
-        
-        logging.info("Splitting data into train/test sets...")
-        self.X_train_full_raw, self.X_test_full_raw, self.Y_train_raw, self.Y_test_raw, self.img_train_raw, self.img_test_raw = get_train_test_data(data=self._data)
+        """Load pre-split data files"""
+        if self.X_train_full_raw is None:
+            logging.info("Loading pre-split data files...")
+            base_path = os.path.join(os.path.dirname(__file__), "..", "data")
+            (
+                self.X_train_full_raw,
+                self.X_test_full_raw,
+                self.Y_train_raw,
+                self.Y_test_raw,
+                self.img_train_raw,
+                self.img_test_raw
+            ) = load_split_data(base_path)
+            
+            logging.info(
+                f"Raw Train Data: {self.X_train_full_raw.shape}, Raw Test Data: {self.X_test_full_raw.shape}"
+            )
+            logging.info(
+                f"Raw Image Train Data: {self.img_train_raw.shape}, Raw Image Test Data: {self.img_test_raw.shape}"
+            )
 
-        logging.info(
-            f"Raw Train Data: {self.X_train_full_raw.shape}, Raw Test Data: {self.X_test_full_raw.shape}"
-        )
-        logging.info(
-            f"Raw Image Train Data: {self.img_train_raw.shape}, Raw Image Test Data: {self.img_test_raw.shape}"
-        )
-
-        self._prepare_feature_columns()
+            self._prepare_feature_columns()
 
     def _prepare_feature_columns(self) -> None:
         """Prepare feature columns by type"""
@@ -157,7 +164,8 @@ class DataManager:
             n_pca_components=n_pca_components,
             n_umap_components=n_umap_components,
             include_location_features=self.include_location_features,
-            random_state=self.config.get("RANDOM_STATE", 42)
+            random_state=self.config.get("RANDOM_STATE", 42),
+            exclude_image_types=self.exclude_image_types
         )
         
         return tabular_transformer, image_transformer
@@ -263,7 +271,7 @@ class DataManager:
             
             # Analyze features
             all_features = X_train_transformed.columns.tolist()
-            image_features = [f for f in all_features if any(img_prefix in f for img_prefix in ['umap_', 'pca_', 'img_', 'interior_', 'exterior_', 'unfurnished_space_', 'other_interior_', 'vector_', 'feature_'])]
+            image_features = [f for f in all_features if any(img_prefix in f for img_prefix in ['umap_', 'pca_', 'img_', 'interior_', 'exterior_', 'unfurnished_space_', 'other_interior_', 'vector_', 'feature_', 'bathroom_', 'bedroom_', 'kitchen_', 'living_room_'])]
             tabular_features = [f for f in all_features if f not in image_features]
             
             feature_info = {

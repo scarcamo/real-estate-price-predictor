@@ -201,7 +201,13 @@ class ModelTrainer:
         
         # Get parameters and train model
         params = get_model_params(model_name, trial)
-        trial_model_instance = model_config["model"]
+        
+        fresh_model_configs = get_model_configs(
+            random_state=self.config["RANDOM_STATE"],
+            metric=self.config["optuna"]["scoring_metric"],
+            n_jobs=1
+        )
+        trial_model_instance = fresh_model_configs[model_name]["model"]
         model_pipeline = build_model_pipeline(trial_model_instance)
         model_pipeline.set_params(**params)
 
@@ -348,8 +354,13 @@ class ModelTrainer:
         """Train and log the final model using the best parameters"""
         logging.info(f"Training final model for {model_name} using best parameters...")
 
-        # Train final model
-        final_model_instance = model_config["model"]
+
+        fresh_final_configs = get_model_configs(
+            random_state=self.config["RANDOM_STATE"],
+            metric=self.config["optuna"]["scoring_metric"],
+            n_jobs=-1
+        )
+        final_model_instance = fresh_final_configs[model_name]["model"]
         best_model_pipeline = build_model_pipeline(final_model_instance)
         
         final_params = best_params.copy()
@@ -399,7 +410,7 @@ class ModelTrainer:
                 tuning_duration,
                 time.time() - start_time,
                 best_model_pipeline,
-                X_train_transformed,
+                X_train_transformed.head(5),
                 selected_feature_names,
                 feature_info,
             )
@@ -427,6 +438,12 @@ class ModelTrainer:
         mlflow.set_tag("experiment_version", self.experiment_version)
         mlflow.log_param("model_name", model_name)
         mlflow.set_tag("feature_set", self.feature_set_name)
+        
+        # Log excluded image types if any
+        exclude_image_types = self.config.get("exclude_image_types", [])
+        if exclude_image_types:
+            mlflow.log_param("exclude_image_types", json.dumps(exclude_image_types))
+            mlflow.set_tag("excluded_image_types", json.dumps(exclude_image_types))
         
         # Log feature information from centralized approach
         if feature_info:
@@ -463,6 +480,14 @@ class ModelTrainer:
         mlflow.log_metric("total_pipeline_duration_sec", total_duration)
         
 
+        # Check if we should skip input examples (for very large datasets)
+        skip_input_example = self.config.get("skip_input_example", False)
+        if skip_input_example:
+            logging.info("Skipping input example logging to reduce artifact size")
+            input_example_for_logging = None
+        else:
+            input_example_for_logging = input_example_data
+
         # Log model
         model_step_in_pipeline = model_pipeline.named_steps["model"]
         try:
@@ -470,30 +495,28 @@ class ModelTrainer:
                 mlflow.xgboost.log_model(
                     model_step_in_pipeline,
                     f"{model_name}_model",
-                    input_example=input_example_data,
-                    pip_requirements=None, 
-                    extra_pip_requirements=None,
+                    input_example=input_example_for_logging,
                 )
             elif isinstance(model_step_in_pipeline, lgb.LGBMModel):
                 mlflow.lightgbm.log_model(
                     model_step_in_pipeline,
                     f"{model_name}_model",
-                    input_example=input_example_data,
-                    pip_requirements=None,  # Disable automatic pip requirement detection
-                    extra_pip_requirements=None,
+                    input_example=input_example_for_logging,
                 )
             else:
                 mlflow.sklearn.log_model(
                     model_pipeline,
                     f"{model_name}_pipeline",
-                    input_example=input_example_data,
-                    pip_requirements=None,  # Disable automatic pip requirement detection
-                    extra_pip_requirements=None,
+                    input_example=input_example_for_logging,
                 )
         except Exception as e:
             logging.error(f"Error logging model {model_name}: {e}")
+            logging.error(f"Model type: {type(model_step_in_pipeline)}")
+            logging.error(f"Pipeline steps: {list(model_pipeline.named_steps.keys())}")
+            import traceback
+            traceback.print_exc()
 
-        # Log feature list
+        # Log feature list (instead of large input example, log just the feature names)
         feature_list_path = "final_selected_features_list.txt"
         with open(feature_list_path, "w") as f:
             for feature in selected_feature_names:

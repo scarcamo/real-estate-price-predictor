@@ -281,7 +281,7 @@ def clean_data():
     vector_columns = [col for col in df.columns if col.startswith("vector_")]
     df.drop(columns=vector_columns, inplace=True)
 
-    df.to_csv(os.path.join("data", "real_estate_thesis_processed.csv"))
+    df.to_feather(os.path.join("data", "real_estate_thesis_processed.feather"))
 
 if __name__ == "__main__":
     clean_data()
