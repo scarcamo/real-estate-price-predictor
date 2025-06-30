@@ -1,14 +1,16 @@
-experiment_version: "v6"
+experiment_version: "v8"
 
 feature_sets:
-  - "rfecv_all_nfeat_158_pca_count_loc.json"
-  - "rfecv_base_nfeat_56_nonpca_count_loc.json"
-  - "rfecv_all_nfeat_158_umap_count_loc.json"
+  - "rfecv_base_56_nonpca_loc.json"
+  - "rfecv_base_img_nfeat_56_pca_count.json"
   - "rfecv_base_poi_pano_nfeat_158_nonpca_count_loc.json"
-
+  - "rfecv_all_nfeat_158_pca_count_loc.json"
 
 models_to_run:
   - "LightGBM"
+  - "XGBoostQuantile"
+  - "XGBoost"
+  - "RandomForest"
 
 feature_sets_dir: "feature_sets"
 optuna_dir: "optuna_studies"
@@ -19,7 +21,14 @@ target_variable: "price"
 # Data filtering options
 data_filtering:
   filter_by_has_img: true
+  img_data_type: "category"  # "all" or "category"
 
+exclude_image_types:
+  - "other_interior"
+  - "exterior"
+  - "unfurnished_space"
+  - "interior"
+  
 cv_folds: 5
 tuning_cv_folds: 5
 
@@ -35,3 +44,5 @@ optuna:
 mlflow:
   tracking_uri: "./mlruns"
   experiment_name_prefix: "RE price predictor" 
+
+skip_input_example: false

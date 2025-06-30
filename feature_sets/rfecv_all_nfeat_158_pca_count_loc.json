@@ -168,7 +168,7 @@
         "apply_pca_img_transform": true,
         "apply_umap_img_transform": false,
         "n_umap_components": null,
-        "n_pca_components": 50,
+        "n_pca_components": 20,
         "apply_scale_transform": false,
         "include_count": true,
         "include_location_features": true,
